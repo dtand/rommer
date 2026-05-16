@@ -154,13 +154,18 @@ def _extract_and_classify(project: Project, zip_path: Path, args):
         # Apply classification — copy files to destinations
         _apply_classification(project, classification, all_files, tmp)
 
+    # Validate ROM and extract header metadata
+    _validate_rom(project)
+
     # Init DB
     from rommer.db.models import init_db
     conn = project.get_db()
     init_db(conn)
+    meta = project.project_json
+    game_title = meta.get("rom", {}).get("game_title", args.name)
     conn.execute(
         "INSERT OR IGNORE INTO project (game_id, game_title) VALUES (?, ?)",
-        (args.name, args.name),
+        (args.name, game_title),
     )
     conn.commit()
     conn.close()
@@ -260,3 +265,32 @@ def _fallback_classify(project: Project, files: list[Path], tmp: Path):
         shutil.copy2(f, dest)
 
     print(f"  Fallback: copied {len(files)} files by extension")
+
+
+def _validate_rom(project: Project):
+    """Validate ROM file and store header metadata in project.json."""
+    rom_path = project.rom_path
+    if not rom_path.exists():
+        print("  WARNING: No ROM file found in project")
+        return
+
+    platform = project.project_json.get("platform", "gba")
+
+    if platform == "gba":
+        from rommer.rom.gba_header import parse_gba_header
+        header = parse_gba_header(rom_path)
+        if header is None:
+            print(f"  WARNING: {rom_path.name} does not appear to be a valid GBA ROM")
+            return
+
+        if not header["checksum_valid"]:
+            print(f"  WARNING: ROM header checksum invalid")
+
+        project.update_metadata(
+            rom=header,
+            game_title=header["game_title"],
+        )
+        print(f"  ROM validated: {header['game_title']} ({header['game_code']}) [{header['maker_name']}]")
+        print(f"    Region: {header['region']} | Size: {header['rom_size_mb']} MB | Checksum: {'OK' if header['checksum_valid'] else 'INVALID'}")
+    else:
+        print(f"  ROM header parsing not yet supported for platform: {platform}")
