@@ -135,21 +135,130 @@ def run_knowledge_analysis(manager: JobManager, job_id: str, project: Project, c
 
 
 def run_ghidra_decompile(manager: JobManager, job_id: str, project: Project, config: dict):
-    """Run Ghidra decompilation workflow."""
+    """Run full Ghidra decompilation in a single headless call.
+
+    One analyzeHeadless invocation:
+    - Import ROM at 0x08000000 (ARM:LE:32:v4t)
+    - Add memory regions (IWRAM, EWRAM, etc.) via preScript
+    - Auto-analyze
+    - Export all decompiled functions via postScript
+    """
+    import os
+    import shutil
     import subprocess
 
-    manager.emit_progress(job_id, "Exporting labels", 10, "Preparing discovery labels for Ghidra...")
+    # Find analyzeHeadless
+    ghidra_headless = os.environ.get("GHIDRA_HEADLESS", "/Applications/ghidra_12.0_PUBLIC/support/analyzeHeadless")
+    if not os.path.exists(ghidra_headless):
+        # Try homebrew path
+        ghidra_headless = "/opt/homebrew/Cellar/ghidra/12.0/libexec/support/analyzeHeadless"
+    if not os.path.exists(ghidra_headless):
+        raise FileNotFoundError(f"analyzeHeadless not found. Set GHIDRA_HEADLESS env var.")
 
-    # Export labels
+    rom_path = project.rom_path
+    if not rom_path.exists():
+        raise FileNotFoundError(f"ROM not found: {rom_path}")
+
+    # Scripts directory
+    from pathlib import Path
+    scripts_dir = Path(__file__).parent.parent / "static_analysis" / "ghidra_scripts"
+
+    # Ghidra project directory (temporary, within project workspace)
+    ghidra_project_dir = project.ghidra_dir
+    ghidra_project_dir.mkdir(parents=True, exist_ok=True)
+    project_name = project.name.replace("-", "_")
+
+    # Export discovery labels for import script
+    manager.emit_progress(job_id, "Preparing", 5, "Exporting discovery labels...")
     from rommer.cli.commands.ghidra_decompile import _export_labels
     _export_labels(project)
+    _emit_log(manager, job_id, f"ROM: {rom_path}")
+    _emit_log(manager, job_id, f"Ghidra project: {ghidra_project_dir}/{project_name}")
+    _emit_log(manager, job_id, f"Scripts: {scripts_dir}")
 
-    manager.emit_progress(job_id, "Decompiling", 30, "Running Ghidra headless analysis (this may take a while)...")
+    # Output directory for decompiled code
+    output_dir = project.src_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "functions").mkdir(exist_ok=True)
 
-    # TODO: Actually invoke Ghidra headless
-    # For now, mark as needing manual execution
-    manager.emit_progress(job_id, "Pending", 50, "Ghidra headless execution not yet automated")
-    manager.complete_job(job_id, "Labels exported. Run Ghidra manually for full decompilation.")
+    # Set env var so export script knows where to write
+    env = os.environ.copy()
+    env["ROMMER_OUTPUT_DIR"] = str(output_dir)
+
+    # Build the command
+    cmd = [
+        ghidra_headless,
+        str(ghidra_project_dir),
+        project_name,
+        "-import", str(rom_path),
+        "-processor", "ARM:LE:32:v4t",
+        "-cspec", "default",
+        "-loader", "BinaryLoader",
+        "-loader-baseAddr", "0x08000000",
+        "-preScript", str(scripts_dir / "setup_memory.py"),
+        "-postScript", str(scripts_dir / "export_decompiled.py"),
+        "-postScript", str(scripts_dir / "export_split.py"),
+        "-scriptPath", str(scripts_dir),
+        "-max-cpu", "4",
+        "-analysisTimeoutPerFile", "600",
+        "-overwrite",
+    ]
+
+    _emit_log(manager, job_id, f"Command: {' '.join(cmd[:6])}...")
+    manager.emit_progress(job_id, "Decompiling", 15, "Running Ghidra headless analysis...")
+    _emit_log(manager, job_id, "Starting Ghidra (this typically takes 5-15 minutes)...")
+
+    # Run with streaming output
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+    )
+
+    func_count = 0
+    for line in proc.stdout:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Parse Ghidra output for progress updates
+        if "Importing" in line:
+            manager.emit_progress(job_id, "Importing ROM", 20, line[:100])
+        elif "Analyzing" in line or "analysis" in line.lower():
+            manager.emit_progress(job_id, "Analyzing", 40, line[:100])
+        elif "Decompiling" in line or "decompiled" in line.lower():
+            # Track function count from export script output
+            if "decompiled" in line.lower():
+                try:
+                    # Look for patterns like "1234 decompiled"
+                    parts = line.split()
+                    for i, p in enumerate(parts):
+                        if "decompiled" in p.lower() and i > 0:
+                            func_count = int(parts[i - 1].replace(",", ""))
+                except (ValueError, IndexError):
+                    pass
+            pct = min(90, 50 + (func_count // 500))
+            manager.emit_progress(job_id, "Decompiling", pct, f"{func_count} functions...")
+        elif "Done" in line or "complete" in line.lower():
+            manager.emit_progress(job_id, "Finishing", 95, line[:100])
+
+        _emit_log(manager, job_id, line[:200])
+
+    proc.wait()
+
+    if proc.returncode != 0:
+        raise RuntimeError(f"Ghidra exited with code {proc.returncode}")
+
+    # Count output files
+    functions_dir = output_dir / "functions"
+    if functions_dir.exists():
+        func_files = list(functions_dir.glob("*.c"))
+        func_count = len(func_files) if func_files else func_count
+
+    _emit_log(manager, job_id, f"Decompilation complete: {func_count} functions")
+    manager.complete_job(job_id, f"Decompiled {func_count} functions")
 
 
 def _store_graph(project: Project, graph: dict):

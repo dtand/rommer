@@ -8,7 +8,9 @@ import json
 from ghidra.app.decompiler import DecompInterface
 from ghidra.util.task import ConsoleTaskMonitor
 
-output_dir = os.path.join(os.path.dirname(sourceFile.getAbsolutePath()), "decompiled")
+output_dir = os.environ.get("ROMMER_OUTPUT_DIR")
+if not output_dir:
+    output_dir = os.path.join(os.path.dirname(sourceFile.getAbsolutePath()), "decompiled")
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 

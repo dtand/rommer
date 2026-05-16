@@ -9,7 +9,10 @@ import re
 from ghidra.app.decompiler import DecompInterface
 from ghidra.util.task import ConsoleTaskMonitor
 
-output_dir = os.path.join(os.path.dirname(sourceFile.getAbsolutePath()), "decompiled", "functions")
+base_dir = os.environ.get("ROMMER_OUTPUT_DIR")
+if not base_dir:
+    base_dir = os.path.join(os.path.dirname(sourceFile.getAbsolutePath()), "decompiled")
+output_dir = os.path.join(base_dir, "functions")
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
