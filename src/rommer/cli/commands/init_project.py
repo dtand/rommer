@@ -1,5 +1,10 @@
-"""rommer init-project - scaffold a new project workspace from a ZIP."""
+"""rommer init-project - scaffold a new project workspace from a ZIP.
 
+Uses a Claude agent to intelligently classify files from the ZIP into
+a meaningful project structure.
+"""
+
+import json
 import shutil
 import tempfile
 import zipfile
@@ -8,56 +13,61 @@ from pathlib import Path
 from rommer.config import Project
 
 
-# File classification by extension
-EXTENSION_MAP = {
-    # ROMs
-    ".gba": "rom",
-    ".gb": "rom",
-    ".gbc": "rom",
-    ".nes": "rom",
-    ".sfc": "rom",
-    ".smc": "rom",
-    # Save states
-    ".sav": "save_states",
-    ".xps": "save_states",
-    ".ss0": "save_states",
-    ".ss1": "save_states",
-    ".ss2": "save_states",
-    ".state": "save_states",
-    # Maps/images
-    ".png": "knowledge/maps",
-    ".gif": "knowledge/maps",
-    ".jpg": "knowledge/maps",
-    ".jpeg": "knowledge/maps",
-    ".bmp": "knowledge/maps",
-    # Guides/docs
-    ".txt": "knowledge/guides",
-    ".md": "knowledge/guides",
-    ".pdf": "knowledge/guides",
-    ".rtf": "knowledge/guides",
-    ".doc": "knowledge/guides",
-    ".docx": "knowledge/guides",
-    # Codes
-    ".xml": "knowledge/codes",
-    ".cht": "knowledge/codes",
-    # Generic
-    ".json": "knowledge/misc",
-    ".csv": "knowledge/misc",
-}
+CLASSIFICATION_PROMPT = """\
+You are setting up a game reverse engineering project. I've extracted a ZIP file
+containing game resources. Your job is to classify each file and decide where it
+belongs in the project workspace.
 
-# Filename patterns that override extension-based classification
-FILENAME_PATTERNS = {
-    "walkthrough": "knowledge/guides",
-    "manual": "knowledge/guides",
-    "guide": "knowledge/guides",
-    "map": "knowledge/maps",
-    "layout": "knowledge/maps",
-    "code": "knowledge/codes",
-    "cheat": "knowledge/codes",
-    "codebreaker": "knowledge/codes",
-    "gameshark": "knowledge/codes",
-    "action_replay": "knowledge/codes",
-}
+## Project Structure
+
+The workspace has this layout:
+```
+rom/              — The game ROM file (exactly one)
+knowledge/        — All supplementary resources, organized meaningfully
+  guides/         — Walkthroughs, manuals, strategy guides
+  maps/           — Map layouts, area diagrams, room screenshots
+  codes/          — Action Replay, CodeBreaker, GameShark codes
+  sprites/        — Character sprites, tilesets, animation frames
+  saves/          — Save files, save states
+  reference/      — Data tables, item lists, enemy stats, formulae
+  misc/           — Anything that doesn't fit elsewhere
+save_states/      — Save states for the emulator (working copies)
+```
+
+You may create additional subdirectories under knowledge/ if the content warrants it
+(e.g., knowledge/screenshots/, knowledge/audio/, knowledge/symbols/).
+
+## Files to Classify
+
+{file_listing}
+
+## Instructions
+
+For each file, decide:
+1. Which directory it belongs in
+2. Whether to rename it for clarity (optional, keep original if already clear)
+
+Consider:
+- File content and purpose, not just extension
+- .png/.gif could be maps, sprites, screenshots, or random images
+- .txt could be walkthroughs, code lists, notes, or data dumps
+- Group related files together
+- A ROM is usually the largest binary file with a game platform extension (.gba, .gb, .nes, etc.)
+- Save states (.ss0, .xps, .sav) go in save_states/ for emulator use
+
+Output JSON:
+{{
+  "classification": [
+    {{
+      "source": "original_filename.ext",
+      "destination": "knowledge/maps/overworld_map.png",
+      "reason": "Map layout image showing game overworld"
+    }},
+    ...
+  ],
+  "notes": "Any observations about the resource collection"
+}}
+"""
 
 
 def handler(args):
@@ -77,79 +87,74 @@ def handler(args):
             print(f"Error: not a valid ZIP file: {zip_path}")
             raise SystemExit(1)
 
-        _extract_and_classify(project, zip_path)
+        _extract_and_classify(project, zip_path, args)
     else:
         print("  No ZIP provided - empty workspace created")
         print(f"  Add ROM to: {project.root / 'rom/'}")
         print(f"  Add knowledge to: {project.root / 'knowledge/'}")
 
 
-def _extract_and_classify(project: Project, zip_path: Path):
-    """Extract ZIP contents and classify files into project structure."""
+def _extract_and_classify(project: Project, zip_path: Path, args):
+    """Extract ZIP and use Claude agent to classify files."""
+    from rommer.preprocessor.claude import invoke
+
     print(f"  Extracting: {zip_path.name}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
-        # Extract ZIP
         with zipfile.ZipFile(zip_path, "r") as zf:
             zf.extractall(tmp)
 
         # Collect all files (flatten nested dirs)
         all_files = [f for f in tmp.rglob("*") if f.is_file() and not f.name.startswith(".")]
-
         print(f"  Found {len(all_files)} files")
+
+        # Build file listing with metadata for the agent
+        file_listing = _build_file_listing(all_files, tmp)
+
+        print(f"  Classifying files with Claude agent...")
+        prompt = CLASSIFICATION_PROMPT.format(file_listing=file_listing)
+
+        result = invoke(
+            prompt=prompt,
+            model="sonnet",
+            timeout=120,
+        )
+
+        if isinstance(result, str):
+            print(f"  WARNING: Agent returned text instead of JSON, falling back to basic classification")
+            _fallback_classify(project, all_files, tmp)
+            return
+
+        classification = result.get("classification", [])
+        if not classification:
+            print(f"  WARNING: Empty classification, falling back to basic")
+            _fallback_classify(project, all_files, tmp)
+            return
+
+        # Show the proposed classification
+        print()
+        print("  Proposed classification:")
+        for entry in classification:
+            src = entry.get("source", "")
+            dest = entry.get("destination", "")
+            reason = entry.get("reason", "")
+            print(f"    {src}")
+            print(f"      → {dest}")
+            if reason:
+                print(f"        ({reason})")
+
+        if result.get("notes"):
+            print()
+            print(f"  Agent notes: {result['notes']}")
+
         print()
 
-        classified = {}
-        for file_path in sorted(all_files):
-            dest = _classify_file(file_path)
-            classified.setdefault(dest, []).append(file_path)
+        # Apply classification — copy files to destinations
+        _apply_classification(project, classification, all_files, tmp)
 
-        # Copy files to destinations
-        for dest, files in sorted(classified.items()):
-            dest_dir = project.root / dest
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            print(f"  {dest}/ ({len(files)} files)")
-            for f in files:
-                target = dest_dir / f.name
-                # Handle duplicates
-                if target.exists():
-                    stem = f.stem
-                    suffix = f.suffix
-                    i = 1
-                    while target.exists():
-                        target = dest_dir / f"{stem}_{i}{suffix}"
-                        i += 1
-                shutil.copy2(f, target)
-                print(f"    {f.name}")
-
-    # Summary
-    print()
-    print("  Classification complete. Review the workspace:")
-    print(f"    {project.root}")
-    print()
-
-    # Check for ROM
-    rom_dir = project.root / "rom"
-    roms = list(rom_dir.iterdir()) if rom_dir.exists() else []
-    if roms:
-        print(f"  ROM found: {roms[0].name}")
-    else:
-        print("  WARNING: No ROM file detected in ZIP")
-
-    # Check for walkthrough
-    guides_dir = project.root / "knowledge" / "guides"
-    guides = list(guides_dir.iterdir()) if guides_dir.exists() else []
-    walkthroughs = [g for g in guides if "walkthrough" in g.name.lower()]
-    if walkthroughs:
-        print(f"  Walkthrough found: {walkthroughs[0].name}")
-    elif guides:
-        print(f"  Guides found: {len(guides)} files (no file named 'walkthrough')")
-    else:
-        print("  WARNING: No walkthrough/guide files found")
-
-    # Init DB with schema
+    # Init DB
     from rommer.db.models import init_db
     conn = project.get_db()
     init_db(conn)
@@ -162,19 +167,96 @@ def _extract_and_classify(project: Project, zip_path: Path):
     print("  Database initialized")
 
 
-def _classify_file(file_path: Path) -> str:
-    """Classify a file into a destination directory."""
-    name_lower = file_path.name.lower()
-    ext = file_path.suffix.lower()
+def _build_file_listing(files: list[Path], base_dir: Path) -> str:
+    """Build a descriptive file listing for the agent."""
+    lines = []
+    for f in sorted(files):
+        rel = f.relative_to(base_dir)
+        size = f.stat().st_size
+        size_str = _human_size(size)
 
-    # Check filename patterns first (more specific)
-    for pattern, dest in FILENAME_PATTERNS.items():
-        if pattern in name_lower:
-            return dest
+        # Peek at text files
+        preview = ""
+        if f.suffix.lower() in (".txt", ".md", ".csv", ".xml", ".json", ".cht"):
+            try:
+                text = f.read_text(errors="replace")[:200]
+                preview = f' — preview: "{text.strip()[:100]}"'
+            except Exception:
+                pass
 
-    # Fall back to extension
-    if ext in EXTENSION_MAP:
-        return EXTENSION_MAP[ext]
+        lines.append(f"- {rel} ({size_str}){preview}")
 
-    # Unknown — put in misc
-    return "knowledge/misc"
+    return "\n".join(lines)
+
+
+def _human_size(size: int) -> str:
+    """Format bytes as human-readable."""
+    if size < 1024:
+        return f"{size}B"
+    elif size < 1024 * 1024:
+        return f"{size / 1024:.1f}KB"
+    else:
+        return f"{size / (1024 * 1024):.1f}MB"
+
+
+def _apply_classification(project: Project, classification: list[dict], all_files: list[Path], tmp: Path):
+    """Copy files according to agent classification."""
+    # Build a lookup from filename to source path
+    file_map = {}
+    for f in all_files:
+        file_map[f.name] = f
+        # Also index by relative path in case of nested dirs
+        rel = str(f.relative_to(tmp))
+        file_map[rel] = f
+
+    copied = 0
+    missed = 0
+
+    for entry in classification:
+        src_name = entry.get("source", "")
+        dest_rel = entry.get("destination", "")
+
+        if not src_name or not dest_rel:
+            continue
+
+        # Find the source file
+        src_path = file_map.get(src_name)
+        if not src_path:
+            # Try matching just the filename part
+            for key, path in file_map.items():
+                if Path(key).name == src_name or key.endswith(src_name):
+                    src_path = path
+                    break
+
+        if not src_path:
+            print(f"    WARNING: source not found: {src_name}")
+            missed += 1
+            continue
+
+        # Create destination
+        dest_path = project.root / dest_rel
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_path, dest_path)
+        copied += 1
+
+    print(f"  Copied {copied} files ({missed} not found)")
+
+
+def _fallback_classify(project: Project, files: list[Path], tmp: Path):
+    """Basic extension-based classification when agent fails."""
+    ext_map = {
+        ".gba": "rom", ".gb": "rom", ".nes": "rom",
+        ".sav": "save_states", ".xps": "save_states", ".ss0": "save_states",
+        ".png": "knowledge/maps", ".gif": "knowledge/maps",
+        ".txt": "knowledge/guides", ".md": "knowledge/guides", ".pdf": "knowledge/guides",
+        ".xml": "knowledge/codes", ".cht": "knowledge/codes",
+    }
+
+    for f in files:
+        ext = f.suffix.lower()
+        dest_dir = ext_map.get(ext, "knowledge/misc")
+        dest = project.root / dest_dir / f.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(f, dest)
+
+    print(f"  Fallback: copied {len(files)} files by extension")
