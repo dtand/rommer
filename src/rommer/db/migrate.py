@@ -17,6 +17,7 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     """Apply migrations to an open connection."""
     _add_knowledge_tables(conn)
     _add_discovery_source_column(conn)
+    _add_discovery_metadata_column(conn)
     _add_discovery_tier_index(conn)
     _add_human_hints_column(conn)
 
@@ -50,6 +51,15 @@ def _add_discovery_source_column(conn: sqlite3.Connection) -> None:
         conn.execute("SELECT source FROM discovery LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE discovery ADD COLUMN source TEXT DEFAULT 'dynamic'")
+        conn.commit()
+
+
+def _add_discovery_metadata_column(conn: sqlite3.Connection) -> None:
+    """Add metadata JSON column to discovery table if missing."""
+    try:
+        conn.execute("SELECT metadata FROM discovery LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE discovery ADD COLUMN metadata TEXT")
         conn.commit()
 
 

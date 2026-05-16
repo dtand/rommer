@@ -47,12 +47,21 @@ FOR CHEAT CODES:
 - If codes appear encrypted (random-looking hex), try to identify the encryption
   and write a decryption script
 
+STRUCT AND ARRAY ANALYSIS:
+When you discover a struct or array, go deep:
+- Identify the base address, stride (bytes per entry), and count
+- Break down EVERY field within the struct with offset, type, and semantic name
+- For arrays, map individual indices to their game meaning (e.g., index 0 = Kuwagata medal)
+- Use cheat code labels to infer field meanings (e.g., "Max HP" code at offset +4 means field at +4 is HP)
+- Cross-reference multiple codes targeting the same struct to build complete field maps
+
 APPROACH:
 1. List all files in the knowledge/ directory
 2. Process each file one at a time
 3. For complex files (encrypted codes, binary data), write a Python helper script,
    run it, and use the output
 4. Collect all discovered addresses
+5. For any discovered structs/arrays, analyze field layout in detail
 
 OUTPUT FORMAT:
 After analyzing ALL files, output a JSON object:
@@ -63,7 +72,29 @@ After analyzing ALL files, output a JSON object:
       "address": "0x03001234",
       "data_type": "u16",
       "confidence": "confirmed",
-      "notes": "Found via CodeBreaker code for 'Max Money'"
+      "notes": "Found via CodeBreaker code for 'Max Money'",
+      "metadata": null
+    },
+    {
+      "label": "medal_array",
+      "address": "0x03000BE0",
+      "data_type": "struct[30]",
+      "confidence": "confirmed",
+      "notes": "30-slot medal array, 0x40 bytes per entry",
+      "metadata": {
+        "kind": "array",
+        "stride": 64,
+        "count": 30,
+        "fields": [
+          {"offset": 0, "name": "id", "type": "u16", "notes": "medal type ID"},
+          {"offset": 2, "name": "exp", "type": "u16"},
+          {"offset": 4, "name": "attribute", "type": "u8", "values": {"0": "Speed", "1": "Power"}}
+        ],
+        "entries": [
+          {"index": 0, "label": "Kuwagata"},
+          {"index": 1, "label": "Kabuto"}
+        ]
+      }
     }
   ],
   "observations": [
@@ -149,12 +180,16 @@ class KnowledgeAnalyzer(BaseAgent):
             if existing:
                 continue
 
+            # Serialize metadata if present
+            metadata = c.get("metadata")
+            metadata_json = json.dumps(metadata) if metadata else None
+
             try:
                 self.db.execute(
                     """INSERT INTO discovery
                        (label, address, data_type, tier, confidence,
-                        source, discovery_method, notes)
-                       VALUES (?, ?, ?, ?, ?, 'knowledge_analysis', 'agent', ?)""",
+                        source, discovery_method, notes, metadata)
+                       VALUES (?, ?, ?, ?, ?, 'knowledge_analysis', 'agent', ?, ?)""",
                     (
                         label,
                         address,
@@ -162,6 +197,7 @@ class KnowledgeAnalyzer(BaseAgent):
                         "golden" if c.get("confidence") == "confirmed" else "scratch",
                         c.get("confidence", "probable"),
                         c.get("notes", ""),
+                        metadata_json,
                     ),
                 )
                 staged.append(c)

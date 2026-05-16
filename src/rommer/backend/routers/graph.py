@@ -66,7 +66,7 @@ def get_discoveries(project: str = Query(...), tier: str = Query(default=None)):
 
     conn = p.get_db()
     try:
-        query = "SELECT id, label, address, data_type, tier, confidence, discovered_by_node, source, notes FROM discovery"
+        query = "SELECT id, label, address, data_type, tier, confidence, discovered_by_node, source, notes, metadata FROM discovery"
         params: list[str] = []
         if tier:
             query += " WHERE tier = ?"
@@ -77,7 +77,16 @@ def get_discoveries(project: str = Query(...), tier: str = Query(default=None)):
         rows = []
     conn.close()
 
-    return {"discoveries": [dict(r) for r in rows]}
+    results = []
+    for r in rows:
+        d = dict(r)
+        if d.get("metadata"):
+            try:
+                d["metadata"] = json.loads(d["metadata"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        results.append(d)
+    return {"discoveries": results}
 
 
 class TierUpdate(BaseModel):

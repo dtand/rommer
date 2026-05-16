@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS discovery (
     tier TEXT DEFAULT 'scratch',
     promotion_reason TEXT,
     source TEXT DEFAULT 'dynamic',
+    metadata TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_discovery_node ON discovery(discovered_by_node);
