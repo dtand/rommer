@@ -6,16 +6,6 @@ async function fetchJson<T>(path: string): Promise<T> {
   return res.json();
 }
 
-async function postJson<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json();
-}
-
 async function postFormData<T>(path: string, formData: FormData): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
@@ -39,6 +29,12 @@ export const api = {
     return postFormData<InitProjectResult>('/init-project', formData);
   },
 
-  knowledgeFiles: (project: string) =>
-    fetchJson<{ files: { path: string; type: string; size: number }[] }>(`/project/${project}/knowledge`),
+  graphNodes: (project: string) =>
+    fetchJson<{ nodes: Record<string, unknown>[] }>(`/graph/nodes?project=${project}`),
+
+  discoveries: (project: string) =>
+    fetchJson<{ discoveries: Record<string, unknown>[] }>(`/graph/discoveries?project=${project}`),
+
+  sections: (project: string) =>
+    fetchJson<{ sections: Record<string, unknown>[] }>(`/graph/sections?project=${project}`),
 };

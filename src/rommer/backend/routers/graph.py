@@ -75,3 +75,23 @@ def get_discoveries(project: str = Query(...), tier: str = Query(default=None)):
     conn.close()
 
     return {"discoveries": [dict(r) for r in rows]}
+
+
+@router.get("/graph/sections")
+def get_sections(project: str = Query(...)):
+    """Get walkthrough sections for a project."""
+    p = Project(project)
+    if not p.exists():
+        return {"error": f"Project '{project}' not found"}
+
+    conn = p.get_db()
+    try:
+        rows = conn.execute(
+            "SELECT section_id, title, type, line_start, line_end, description "
+            "FROM section ORDER BY line_start"
+        ).fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+
+    return {"sections": [dict(r) for r in rows]}

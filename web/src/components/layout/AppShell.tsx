@@ -1,13 +1,25 @@
-import { Outlet, useNavigate } from 'react-router-dom';
+import { Outlet, useNavigate, useParams, NavLink, useLocation } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi';
 import { api } from '../../api/client';
 import type { ProjectSummary } from '../../types';
 
+const navItems = [
+  { path: '', label: 'Dashboard', icon: '~' },
+  { path: '/graph', label: 'Graph', icon: '>' },
+  { path: '/data', label: 'Data', icon: '#' },
+  { path: '/walkthrough', label: 'Walkthrough', icon: '"' },
+];
+
 export function AppShell() {
   const { data } = useApi(() => api.projects(), []);
   const navigate = useNavigate();
+  const location = useLocation();
 
   const projects = data?.projects ?? [];
+
+  // Extract current project name from URL
+  const match = location.pathname.match(/^\/project\/([^/]+)/);
+  const currentProject = match ? match[1] : '';
 
   return (
     <div className="flex h-full bg-surface">
@@ -21,7 +33,7 @@ export function AppShell() {
               if (val === '__new__') navigate('/new');
               else if (val) navigate(`/project/${val}`);
             }}
-            defaultValue=""
+            value={currentProject}
           >
             <option value="" disabled>Select project...</option>
             {projects.map((p: ProjectSummary) => (
@@ -32,7 +44,31 @@ export function AppShell() {
             <option value="__new__">+ New Project</option>
           </select>
         </div>
-        <div className="flex-1" />
+
+        {currentProject && (
+          <div className="flex-1 py-2">
+            {navItems.map((item) => (
+              <NavLink
+                key={item.path}
+                to={`/project/${currentProject}${item.path}`}
+                end
+                className={({ isActive }) =>
+                  `flex items-center gap-2 px-4 py-2.5 text-sm font-mono transition-colors ${
+                    isActive
+                      ? 'bg-cyber-bg text-cyber border-r-2 border-cyber'
+                      : 'hover:bg-cyber-bg/50 hover:text-cyber-dim text-text-muted'
+                  }`
+                }
+              >
+                <span className="text-xs text-cyber-muted">{item.icon}</span>
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
+        )}
+
+        {!currentProject && <div className="flex-1" />}
+
         <div className="p-4 border-t border-border-dim">
           <div className="text-[10px] text-text-muted font-mono">ROMMER v0.1</div>
         </div>
