@@ -66,7 +66,7 @@ def merge_discoveries(project: Project, job_ids: list[str], strategy: str = "uni
             (project_id, d["label"], d["address"], d["data_type"],
              "golden" if d["confidence"] == "confirmed" else "scratch",
              d["confidence"], d.get("notes", ""),
-             json.dumps(d["metadata"]) if d.get("metadata") else None),
+             d["metadata"] if d.get("metadata") else None),  # already JSON string from staging
         )
         inserted += 1
 
