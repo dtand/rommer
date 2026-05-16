@@ -57,19 +57,21 @@ def parse_project_codes(project: Project) -> int:
 
 
 def parse_codebreaker_xml(path: Path) -> list[dict]:
-    """Parse CodeBreaker XML format.
+    """Parse CodeBreaker/Action Replay codes from XML files.
 
-    Expected structure:
-    <codelist>
-      <game name="...">
-        <code name="description">
-          XXXXXXXX YYYY
-        </code>
-      </game>
-    </codelist>
+    Handles multiple formats:
+    1. Standard codelist XML: <codelist><game><code>...</code></game></codelist>
+    2. Word XML documents containing embedded codes (Word 2003 XML)
+    3. Flat cheat format: <cheat><name>...</name><code>...</code></cheat>
     """
     discoveries = []
     try:
+        raw = path.read_text(errors="replace")
+
+        # Detect Word XML (contains Microsoft Word namespace)
+        if "schemas.microsoft.com/office/word" in raw:
+            return _parse_word_xml_codes(raw)
+
         tree = ET.parse(path)
         root = tree.getroot()
 
@@ -80,7 +82,6 @@ def parse_codebreaker_xml(path: Path) -> list[dict]:
                 parsed = _parse_code_lines(text, name)
                 discoveries.extend(parsed)
 
-        # Also try flat format: <cheat><name>...</name><code>...</code></cheat>
         for cheat in root.iter("cheat"):
             name_el = cheat.find("name")
             code_el = cheat.find("code")
@@ -92,6 +93,40 @@ def parse_codebreaker_xml(path: Path) -> list[dict]:
 
     except (ET.ParseError, Exception):
         pass
+
+    return discoveries
+
+
+def _parse_word_xml_codes(raw: str) -> list[dict]:
+    """Extract cheat codes from a Word 2003 XML document.
+
+    Extracts text content, identifies labeled code sections,
+    and parses CodeBreaker/Action Replay format codes.
+    """
+    # Extract all text content from Word XML
+    # Text is in <w:t> tags
+    text_parts = re.findall(r'<w:t[^>]*>(.*?)</w:t>', raw)
+    full_text = "\n".join(text_parts)
+
+    discoveries = []
+    current_label = ""
+    lines = full_text.splitlines()
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Check if this is a code line (8 hex + space + 4-8 hex)
+        code_match = re.match(r'^([0-9A-Fa-f]{8})\s+([0-9A-Fa-f]{4,8})$', line)
+        if code_match:
+            parsed = _parse_code_lines(line, current_label)
+            discoveries.extend(parsed)
+        else:
+            # Treat as potential label (skip very short or numeric-only lines)
+            cleaned = line.strip()
+            if cleaned and len(cleaned) > 2 and not re.match(r'^[0-9A-Fa-f\s]+$', cleaned):
+                current_label = cleaned
 
     return discoveries
 
@@ -124,10 +159,13 @@ def parse_text_codes(path: Path) -> list[dict]:
 def _parse_code_lines(text: str, label: str) -> list[dict]:
     """Parse individual code lines into discoveries.
 
-    CodeBreaker format: TTAAAAAA YYYY
-    - TT = code type (3 = 16-bit write, 8 = 8-bit write, etc.)
-    - AAAAAA = address (offset into GBA memory)
-    - YYYY = value
+    Only handles unencrypted CodeBreaker codes:
+    - Type 3: 16-bit constant write (3XXXXXXX YYYY)
+    - Type 8: 8-bit constant write (8XXXXXXX 00YY)
+    - Type 0: 32-bit constant write (0XXXXXXX YYYYYYYY)
+
+    Encrypted codes (AR v3, random-looking hex) are skipped —
+    those need the knowledge analysis agent to decrypt.
     """
     discoveries = []
 
@@ -140,27 +178,23 @@ def _parse_code_lines(text: str, label: str) -> list[dict]:
         raw_addr = match.group(1)
         value = match.group(2)
 
-        # Decode CodeBreaker type and address
         code_type = int(raw_addr[0], 16)
         address_offset = int(raw_addr[1:], 16)
 
-        # Map to GBA memory (CodeBreaker uses IWRAM-relative for most codes)
-        # Type 3: 16-bit constant write to 0x03000000 + offset
-        # Type 8: 8-bit constant write
-        # Type 0: 32-bit constant write
-        if code_type == 3:
+        # Only accept known unencrypted CodeBreaker types
+        # with addresses in valid GBA IWRAM/EWRAM range
+        if code_type == 3 and address_offset < 0x8000:
             address = f"0x{0x03000000 + address_offset:08x}"
             data_type = "u16"
-        elif code_type == 8:
+        elif code_type == 8 and address_offset < 0x8000:
             address = f"0x{0x03000000 + address_offset:08x}"
             data_type = "u8"
-        elif code_type == 0:
-            address = f"0x{0x03000000 + address_offset:08x}"
+        elif code_type == 0 and address_offset < 0x40000:
+            address = f"0x{0x02000000 + address_offset:08x}"
             data_type = "u32"
         else:
-            # Other types (conditional, etc.) - still record the address
-            address = f"0x{0x03000000 + address_offset:08x}"
-            data_type = "u16"
+            # Likely encrypted or unknown format — skip
+            continue
 
         discoveries.append({
             "label": label or f"code_{address}",

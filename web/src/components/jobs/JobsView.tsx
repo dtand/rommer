@@ -51,10 +51,14 @@ export function JobsView() {
   const jobs = baseJobs.map(job => {
     const update = wsUpdates.get(job.id);
     if (!update) return job;
+    const mergedStatus = update.status || job.status;
     return {
       ...job,
-      status: update.status || job.status,
-      progress: update.progress !== undefined ? update.progress : job.progress,
+      status: mergedStatus,
+      // Clear progress bar on completion/failure
+      progress: (mergedStatus === 'completed' || mergedStatus === 'failed')
+        ? null
+        : (update.progress !== undefined ? update.progress : job.progress),
       error: update.error || job.error,
     };
   });
@@ -237,6 +241,8 @@ function EventLine({ event }: { event: JobEvent }) {
       message = event.data.summary || 'Completed';
     } else if (event.type === 'error') {
       message = event.data.error || 'Unknown error';
+    } else if (event.type === 'log') {
+      message = event.data.message || '';
     } else {
       message = JSON.stringify(event.data);
     }
