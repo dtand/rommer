@@ -48,6 +48,18 @@ class BaseAgent(ABC):
         """Return the system prompt for this agent type."""
         ...
 
+    # Preamble injected into all agent system prompts
+    AGENT_PREAMBLE = """\
+WORKSPACE RULES:
+- Your working directory is the project root.
+- If you need to create temporary files (scripts, extracted data, intermediate results),
+  use the `tmp/` directory inside the project root.
+- IMPORTANT: Before you finish, DELETE all files you created in `tmp/`. Do not leave
+  artifacts in the project workspace. Only your final JSON output matters.
+- Do not modify any files outside of `tmp/` unless explicitly instructed to.
+
+"""
+
     def spawn(
         self,
         model: str = "opus",
@@ -66,7 +78,7 @@ class BaseAgent(ABC):
         Returns parsed result dict, or None if dry_run.
         """
         context = self.build_context()
-        system_prompt = self.get_system_prompt()
+        system_prompt = self.AGENT_PREAMBLE + self.get_system_prompt()
 
         if dry_run:
             print(f"[{self.agent_type}] Would spawn with:")

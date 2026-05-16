@@ -55,23 +55,14 @@ When you discover a struct or array, go deep:
 - Use cheat code labels to infer field meanings (e.g., "Max HP" code at offset +4 means field at +4 is HP)
 - Cross-reference multiple codes targeting the same struct to build complete field maps
 
-WORKSPACE:
-- Use the `tmp/` directory inside the project root for any temporary files
-  (scripts, extracted text, intermediate JSON, etc.)
-- IMPORTANT: When you are done, DELETE all files you created in `tmp/`.
-  Do not leave artifacts in the project workspace. Only your final JSON
-  output matters — everything else should be cleaned up.
-
 APPROACH:
-1. Create tmp/ directory for your working files
-2. List all files in the knowledge/ directory
-3. Process each file one at a time
-4. For complex files (encrypted codes, binary data), write a Python helper script
+1. List all files in the knowledge/ directory
+2. Process each file one at a time
+3. For complex files (encrypted codes, binary data), write a Python helper script
    in tmp/, run it, and use the output
-5. Collect all discovered addresses
-6. For any discovered structs/arrays, analyze field layout in detail
-7. Output your final JSON
-8. Clean up: delete everything in tmp/
+4. Collect all discovered addresses
+5. For any discovered structs/arrays, analyze field layout in detail
+6. Output your final JSON
 
 OUTPUT FORMAT:
 After analyzing ALL files, output a JSON object:
