@@ -6,6 +6,16 @@ async function fetchJson<T>(path: string): Promise<T> {
   return res.json();
 }
 
+async function postJson<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
 async function postFormData<T>(path: string, formData: FormData): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
@@ -37,4 +47,17 @@ export const api = {
 
   sections: (project: string) =>
     fetchJson<{ sections: Record<string, unknown>[] }>(`/graph/sections?project=${project}`),
+
+  // Jobs
+  jobs: (project: string) =>
+    fetchJson<{ jobs: Record<string, unknown>[] }>(`/jobs?project=${project}`),
+
+  startJob: (project: string, type: string, config?: Record<string, unknown>) =>
+    postJson<{ job_id: string }>(`/jobs/${type}`, { project, ...config }),
+
+  cancelJob: (jobId: string) =>
+    postJson<{ ok: boolean }>(`/jobs/${jobId}/cancel`),
+
+  jobEvents: (jobId: string) =>
+    fetchJson<{ events: Record<string, unknown>[] }>(`/jobs/${jobId}/events`),
 };
