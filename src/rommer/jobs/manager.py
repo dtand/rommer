@@ -36,11 +36,20 @@ class JobManager:
 
     def __init__(self, project: Project):
         self.project = project
-        self._db = project.get_db()
+        self._db: sqlite3.Connection | None = None
 
     @property
     def db(self) -> sqlite3.Connection:
+        """Get a thread-local DB connection."""
+        # Create new connection per access to handle threading
+        # SQLite with WAL mode supports concurrent readers
+        if self._db is None:
+            self._db = self.project.get_db()
         return self._db
+
+    def _fresh_db(self) -> sqlite3.Connection:
+        """Get a fresh connection (for use in worker threads)."""
+        return self.project.get_db()
 
     def create_job(self, job_type: str, config: dict | None = None) -> str:
         """Create a new pending job. Returns job_id."""
@@ -184,8 +193,11 @@ class JobManager:
         })
 
     def _run_worker(self, job_id: str):
-        """Execute the job's worker function."""
+        """Execute the job's worker function in a background thread."""
         from rommer.jobs.worker import WORKERS
+
+        # Create a fresh DB connection for this thread
+        self._db = self._fresh_db()
 
         status = self.get_status(job_id)
         if not status:
