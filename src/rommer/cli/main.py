@@ -23,6 +23,7 @@ def main():
     sp = subparsers.add_parser("build-graph", help="Run walkthrough graph generation pipeline")
     sp.add_argument("--project", required=True, help="Project name")
     sp.add_argument("--model", default="opus", help="Model to use (default: opus)")
+    sp.add_argument("--walkthrough", help="Specific walkthrough filename to use")
     sp.add_argument("--dry-run", action="store_true", help="Show pipeline steps without executing")
 
     # ghidra-decompile

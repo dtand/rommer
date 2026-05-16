@@ -39,6 +39,9 @@ export const api = {
     return postFormData<InitProjectResult>('/init-project', formData);
   },
 
+  startPipeline: (project: string, walkthrough: string | null, model: string = 'opus') =>
+    postJson<Record<string, unknown>>(`/project/${project}/start-pipeline`, { walkthrough, model }),
+
   graphNodes: (project: string) =>
     fetchJson<{ nodes: Record<string, unknown>[] }>(`/graph/nodes?project=${project}`),
 

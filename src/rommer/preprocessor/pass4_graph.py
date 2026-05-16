@@ -5,6 +5,18 @@ from pathlib import Path
 from rommer.preprocessor.claude import invoke
 
 
+TAG_TAXONOMY = """\
+Event tags: npc_dialogue, story_trigger, room_change, item_receive, item_use,
+  money_decrease, money_increase, shop_transaction, combat_start, combat_reward,
+  menu_interaction, text_input, save_prompt
+Context tags: indoor_navigation, outdoor_navigation, multi_screen_travel,
+  single_room, first_X (e.g. first_combat, first_shop, first_npc_interaction)
+Entity tags: named_npc:NAME, boss_battle, random_battle
+RE tags: position_change, flag_change, new_entity_loaded, map_load,
+  dialogue_state_change, inventory_mutation, stat_change
+"""
+
+
 def generate_graph(
     model: str, walkthrough_path: Path, section_map: dict, systems: dict, data: dict
 ) -> dict:
@@ -14,19 +26,45 @@ def generate_graph(
     """
     system_prompt = (
         "You are converting a game walkthrough into a directed acyclic graph (DAG) of "
-        "exploration nodes. Each node represents a discrete game action or event that "
-        "can be independently verified. Include tags for each node. Output JSON."
+        "exploration nodes for reverse engineering purposes. Each node represents ONE "
+        "discrete player action that could be completed in a short play session "
+        "(30 seconds to 2 minutes of gameplay).\n\n"
+        "GRANULARITY RULES:\n"
+        "- Mirror the guide as closely as possible — break it into succinct, actionable steps\n"
+        "- If the guide says 'go left, talk to NPC, pick up item', that's 3 separate nodes\n"
+        "- Each room transition is its own node\n"
+        "- Each NPC conversation is its own node\n"
+        "- Each item pickup/purchase is its own node\n"
+        "- Each battle is its own node\n"
+        "- Navigation between areas should be broken into individual movement steps\n"
+        "- A full walkthrough should produce hundreds of nodes\n\n"
+        "Each node must be independently verifiable — an agent with an emulator should be able "
+        "to execute just that one step and confirm success via memory state changes.\n\n"
+        f"TAG TAXONOMY (assign 1-8 tags per node):\n{TAG_TAXONOMY}\n"
+        "Use snake_case for all tags. Prefix entity tags (named_npc:dr_aki, medabot:rokusho).\n"
+        "Mark first_X for the first occurrence of each mechanic.\n\n"
+        "Output JSON only."
     )
 
     prompt = (
         f"Read the walkthrough at: {walkthrough_path}\n\n"
         f"Section map: {section_map}\n"
-        f"Systems: {systems.get('game_systems', [])}\n\n"
-        "Generate graph nodes and edges. Each node needs:\n"
-        "- node_id, name, title, description, section_ref\n"
-        "- goal, success_criteria, action_type\n"
-        "- order_index, estimated_inputs, discovery_hints\n"
-        "- tags (1-8 tags from taxonomy)\n\n"
+        f"Game systems: {[s.get('name') for s in systems.get('game_systems', [])]}\n\n"
+        "Generate the graph. For each node provide:\n"
+        "- node_id: short snake_case identifier (e.g. 'enter_lab', 'talk_dr_aki')\n"
+        "- name: brief action description\n"
+        "- title: section reference + short title (e.g. '3.1a - Talk to Dr. Aki')\n"
+        "- description: what the player does (1-2 sentences)\n"
+        "- section_ref: which walkthrough section this belongs to\n"
+        "- goal: what the player is trying to achieve\n"
+        "- success_criteria: how to verify completion (memory state change)\n"
+        "- action_type: one of [navigation, dialogue, combat, acquisition, menu, cutscene, puzzle]\n"
+        "- order_index: sequential integer (1, 2, 3...)\n"
+        "- estimated_inputs: button sequence to execute this step\n"
+        "- discovery_hints: what memory addresses might change during this step\n"
+        "- tags: 1-8 tags from the taxonomy\n\n"
+        "For edges: connect each node to its immediate successor(s).\n"
+        "Format: {\"from\": \"node_id_a\", \"to\": \"node_id_b\"}\n\n"
         "Output: {\"nodes\": [...], \"edges\": [...]}"
     )
 
@@ -36,6 +74,7 @@ def generate_graph(
         model=model,
         allowed_tools=["Read"],
         add_dirs=[walkthrough_path.parent],
+        timeout=1800,  # 30 min for large walkthroughs
     )
 
     if isinstance(result, dict):

@@ -27,11 +27,14 @@ def handler(args):
     init_db(conn)
     conn.close()
 
+    walkthrough = getattr(args, 'walkthrough', None)
     print(f"Running build-graph for: {args.project}")
     print(f"Model: {args.model}")
+    if walkthrough:
+        print(f"Walkthrough: {walkthrough}")
     print()
 
-    results = run_pipeline(project, model=args.model)
+    results = run_pipeline(project, model=args.model, walkthrough=walkthrough)
 
     print()
     print("=== Pipeline Complete ===")

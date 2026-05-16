@@ -15,8 +15,13 @@ from rommer.preprocessor.pass4_graph import generate_graph
 from rommer.preprocessor.pass5_augment import augment_nodes
 
 
-def run_pipeline(project: Project, model: str = "opus") -> dict:
+def run_pipeline(project: Project, model: str = "opus", walkthrough: str | None = None) -> dict:
     """Run all 5 passes of the preprocessor.
+
+    Args:
+        project: Project instance
+        model: Claude model to use
+        walkthrough: Specific walkthrough filename (or auto-detect)
 
     Returns a dict with the accumulated output from each pass.
     """
@@ -25,10 +30,15 @@ def run_pipeline(project: Project, model: str = "opus") -> dict:
 
     # Find walkthrough file
     guides_dir = project.knowledge_dir / "guides"
-    wt_files = list(guides_dir.glob("walkthrough*")) if guides_dir.exists() else []
-    if not wt_files:
-        raise FileNotFoundError(f"No walkthrough file found in {guides_dir}")
-    wt_path = wt_files[0]
+    if walkthrough:
+        wt_path = guides_dir / walkthrough
+        if not wt_path.exists():
+            raise FileNotFoundError(f"Walkthrough not found: {wt_path}")
+    else:
+        wt_files = list(guides_dir.glob("walkthrough*")) if guides_dir.exists() else []
+        if not wt_files:
+            raise FileNotFoundError(f"No walkthrough file found in {guides_dir}")
+        wt_path = wt_files[0]
 
     results = {}
 
