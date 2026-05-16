@@ -177,6 +177,31 @@ CREATE TABLE IF NOT EXISTS node_knowledge (
     relevance TEXT,
     context_snippet TEXT
 );
+
+-- Job tracking
+CREATE TABLE IF NOT EXISTS job (
+    id TEXT PRIMARY KEY,
+    project_id INTEGER REFERENCES project(id),
+    type TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    progress TEXT,
+    config TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_job_project ON job(project_id);
+CREATE INDEX IF NOT EXISTS idx_job_status ON job(status);
+
+CREATE TABLE IF NOT EXISTS job_event (
+    id INTEGER PRIMARY KEY,
+    job_id TEXT REFERENCES job(id),
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    type TEXT NOT NULL,
+    data TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_job_event_job ON job_event(job_id);
 """
 
 
