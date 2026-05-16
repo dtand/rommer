@@ -17,13 +17,8 @@ RE tags: position_change, flag_change, new_entity_loaded, map_load,
 """
 
 
-def generate_graph(
-    model: str, walkthrough_path: Path, section_map: dict, systems: dict, data: dict
-) -> dict:
-    """Generate the walkthrough graph (nodes + edges).
-
-    Returns nodes array and edges array with tags included.
-    """
+def _build_prompts(walkthrough_path: Path, section_map: dict, systems: dict) -> tuple[str, str]:
+    """Build system prompt and user prompt for graph generation."""
     system_prompt = (
         "You are converting a game walkthrough into a directed acyclic graph (DAG) of "
         "exploration nodes for reverse engineering purposes. Each node represents ONE "
@@ -68,13 +63,76 @@ def generate_graph(
         "Output: {\"nodes\": [...], \"edges\": [...]}"
     )
 
+    return system_prompt, prompt
+
+
+def generate_graph(
+    model: str, walkthrough_path: Path, section_map: dict, systems: dict, data: dict
+) -> dict:
+    """Generate the walkthrough graph (nodes + edges).
+
+    Returns nodes array and edges array with tags included.
+    """
+    system_prompt, prompt = _build_prompts(walkthrough_path, section_map, systems)
+
     result = invoke(
         prompt=prompt,
         system_prompt=system_prompt,
         model=model,
         allowed_tools=["Read"],
         add_dirs=[walkthrough_path.parent],
-        timeout=1800,  # 30 min for large walkthroughs
+        timeout=1800,
+    )
+
+    if isinstance(result, dict):
+        return result
+    return {"nodes": [], "edges": [], "raw": str(result)[:500]}
+
+
+def generate_graph_streaming(
+    model: str, walkthrough_path: Path, section_map: dict, systems: dict, data: dict,
+    on_event=None,
+) -> dict:
+    """Generate graph with streaming output for live logging."""
+    from rommer.preprocessor.claude import invoke_streaming
+
+    system_prompt, prompt = _build_prompts(walkthrough_path, section_map, systems)
+
+    result = invoke_streaming(
+        prompt=prompt,
+        system_prompt=system_prompt,
+        model=model,
+        allowed_tools=["Read"],
+        add_dirs=[walkthrough_path.parent],
+        timeout=1800,
+        on_event=on_event,
+    )
+
+    if isinstance(result, dict):
+        return result
+    return {"nodes": [], "edges": [], "raw": str(result)[:500]}
+
+
+def generate_graph_streaming(
+    model: str, walkthrough_path: Path, section_map: dict, systems: dict, data: dict,
+    on_event=None,
+) -> dict:
+    """Generate graph with streaming output for live logging.
+
+    Same as generate_graph but uses invoke_streaming with on_event callback.
+    """
+    from rommer.preprocessor.claude import invoke_streaming
+
+    system_prompt, prompt = _build_prompts(walkthrough_path, section_map, systems)
+
+    result = invoke_streaming(
+        prompt=prompt,
+        system_prompt=system_prompt,
+        model=model,
+        allowed_tools=["Read"],
+        add_dirs=[walkthrough_path.parent],
+        timeout=1800,
+        on_event=on_event,
     )
 
     if isinstance(result, dict):

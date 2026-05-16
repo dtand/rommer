@@ -2,17 +2,23 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { toast } from '../components/layout/Toast';
 
 interface JobEvent {
-  type: 'job_started' | 'job_progress' | 'job_complete' | 'job_failed' | 'job_cancelled' | 'pong';
+  type: 'job_started' | 'job_progress' | 'job_complete' | 'job_failed' | 'job_cancelled' | 'job_log' | 'pong';
   job_id?: string;
   project?: string;
   data?: { step?: string; percent?: number; message?: string; summary?: string };
   error?: string;
 }
 
+export interface LogEntry {
+  timestamp: number;
+  message: string;
+}
+
 interface JobUpdate {
   job_id: string;
   status?: string;
   progress?: { step: string; percent: number; message: string } | null;
+  logs: LogEntry[];
   error?: string;
 }
 
@@ -48,18 +54,27 @@ export function useJobsWebSocket(project: string | undefined) {
 
         setUpdates(prev => {
           const next = new Map(prev);
-          const existing = next.get(jobId) || { job_id: jobId };
+          const existing = next.get(jobId) || { job_id: jobId, logs: [] };
+          if (!existing.logs) existing.logs = [];
 
           if (data.type === 'job_progress') {
             existing.progress = data.data as JobUpdate['progress'];
             existing.status = 'running';
+            // Also add as log entry
+            const msg = `[${data.data?.percent}%] ${data.data?.step}${data.data?.message ? ' — ' + data.data.message : ''}`;
+            existing.logs.push({ timestamp: Date.now(), message: msg });
+          } else if (data.type === 'job_log') {
+            const msg = data.data?.message || '';
+            if (msg) existing.logs.push({ timestamp: Date.now(), message: msg });
           } else if (data.type === 'job_complete') {
             existing.status = 'completed';
             existing.progress = null;
+            existing.logs.push({ timestamp: Date.now(), message: `✓ ${data.data?.summary || 'Completed'}` });
             toast('success', data.data?.summary || 'Job completed');
           } else if (data.type === 'job_failed') {
             existing.status = 'failed';
             existing.error = data.error;
+            existing.logs.push({ timestamp: Date.now(), message: `✗ ${data.error}` });
             toast('error', `Job failed: ${data.error}`);
           } else if (data.type === 'job_cancelled') {
             existing.status = 'cancelled';

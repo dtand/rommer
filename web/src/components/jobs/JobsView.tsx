@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi';
-import { useJobsWebSocket } from '../../hooks/useJobsWebSocket';
+import { useJobsWebSocket, type LogEntry } from '../../hooks/useJobsWebSocket';
 import { api } from '../../api/client';
 
 interface Job {
@@ -99,7 +99,7 @@ export function JobsView() {
       {/* Job detail / log panel */}
       <div className="flex-1 overflow-hidden h-full">
         {selectedJob ? (
-          <JobDetail job={selectedJob} />
+          <JobDetail job={selectedJob} liveLogs={wsUpdates.get(selectedJob.id)?.logs || []} />
         ) : (
           <div className="flex items-center justify-center h-full text-text-muted font-mono text-sm">
             Select a job to view logs
@@ -147,15 +147,15 @@ function JobRow({ job, selected, onClick }: { job: Job; selected: boolean; onCli
   );
 }
 
-function JobDetail({ job }: { job: Job }) {
+function JobDetail({ job, liveLogs }: { job: Job; liveLogs: LogEntry[] }) {
   const { data } = useApi(() => api.jobEvents(job.id), [job.id]);
   const logEndRef = useRef<HTMLDivElement>(null);
   const events: JobEvent[] = (data?.events as JobEvent[]) ?? [];
 
-  // Auto-scroll to bottom when new events arrive
+  // Auto-scroll to bottom when new events or live logs arrive
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [events.length]);
+  }, [events.length, liveLogs.length]);
 
   return (
     <div className="flex flex-col h-full">
@@ -197,12 +197,20 @@ function JobDetail({ job }: { job: Job }) {
 
       {/* Event log */}
       <div className="flex-1 overflow-y-auto p-4 font-mono text-xs">
-        {events.length === 0 ? (
+        {events.length === 0 && liveLogs.length === 0 ? (
           <div className="text-text-muted">No events yet...</div>
         ) : (
-          <div className="space-y-1.5">
+          <div className="space-y-1">
+            {/* Historical events from DB */}
             {events.map((evt) => (
               <EventLine key={evt.id} event={evt} />
+            ))}
+            {/* Live streaming logs from WebSocket */}
+            {liveLogs.map((log, i) => (
+              <div key={`live-${i}`} className="flex gap-2">
+                <span className="text-text-muted shrink-0">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                <span className="text-text-secondary">{log.message}</span>
+              </div>
             ))}
             <div ref={logEndRef} />
           </div>

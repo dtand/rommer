@@ -11,9 +11,9 @@ if TYPE_CHECKING:
 
 
 def run_graph_gen(manager: JobManager, job_id: str, project: Project, config: dict):
-    """Run graph generation (pass 4 + pass 5)."""
-    from rommer.preprocessor.pass4_graph import generate_graph
+    """Run graph generation (pass 4 + pass 5) with streaming logs."""
     from rommer.preprocessor.pass5_augment import augment_nodes
+    from rommer.preprocessor.pass4_graph import generate_graph_streaming
 
     model = config.get("model", "opus")
     walkthrough = config.get("walkthrough")
@@ -34,34 +34,84 @@ def run_graph_gen(manager: JobManager, job_id: str, project: Project, config: di
     systems = _load_json(output_dir / "pass2_systems.json")
     data = _load_json(output_dir / "pass3_data.json")
 
-    # Pass 4: Graph generation
-    manager.emit_progress(job_id, "Pass 4: Graph Generation", 20, "Generating node DAG from walkthrough...")
-    graph = generate_graph(model, wt_path, section_map, systems, data)
+    # Pass 4: Graph generation with streaming
+    manager.emit_progress(job_id, "Pass 4: Graph Generation", 10, "Starting graph generation...")
+    _emit_log(manager, job_id, f"Using walkthrough: {wt_path.name}")
+    _emit_log(manager, job_id, f"Model: {model}")
+    _emit_log(manager, job_id, f"Sections: {len(section_map.get('sections', []))}")
+
+    def on_event(event: dict):
+        """Stream callback — log agent activity."""
+        etype = event.get("type", "")
+        if etype == "agent_text":
+            text = event.get("text", "").strip()
+            if text and len(text) > 5:
+                # Only log meaningful text chunks
+                _emit_log(manager, job_id, text[:200])
+        elif etype == "agent_tool_call":
+            tool = event.get("tool", "")
+            _emit_log(manager, job_id, f"[tool] {tool}")
+
+    graph = generate_graph_streaming(model, wt_path, section_map, systems, data, on_event=on_event)
     (output_dir / "pass4_graph.json").write_text(json.dumps(graph, indent=2))
 
+    node_count = len(graph.get("nodes", []))
+    edge_count = len(graph.get("edges", []))
+    _emit_log(manager, job_id, f"Generated {node_count} nodes, {edge_count} edges")
+
     # Store in DB
-    manager.emit_progress(job_id, "Storing graph", 70, f"{len(graph.get('nodes', []))} nodes, {len(graph.get('edges', []))} edges")
+    manager.emit_progress(job_id, "Storing graph", 70, f"{node_count} nodes, {edge_count} edges")
     _store_graph(project, graph)
 
     # Pass 5: Augmentation
     manager.emit_progress(job_id, "Pass 5: Augmentation", 85, "Tagging nodes + linking knowledge...")
     augment_result = augment_nodes(project, model)
     (output_dir / "pass5_augment.json").write_text(json.dumps(augment_result, indent=2))
+    _emit_log(manager, job_id, f"Tagged {augment_result.get('tagged_count', 0)} nodes, linked {augment_result.get('links_created', 0)} resources")
 
-    node_count = len(graph.get("nodes", []))
     manager.complete_job(job_id, f"Generated {node_count} nodes")
+
+
+def _emit_log(manager: JobManager, job_id: str, message: str):
+    """Emit a log event for a job."""
+    import json as _json
+    manager.db.execute(
+        "INSERT INTO job_event (job_id, type, data) VALUES (?, 'log', ?)",
+        (job_id, _json.dumps({"message": message})),
+    )
+    manager.db.commit()
+    from rommer.jobs.manager import _broadcast
+    _broadcast({
+        "type": "job_log",
+        "job_id": job_id,
+        "project": manager.project.name,
+        "data": {"message": message},
+    })
 
 
 def run_knowledge_analysis(manager: JobManager, job_id: str, project: Project, config: dict):
     """Analyze all knowledge resources for discoveries."""
     manager.emit_progress(job_id, "Scanning resources", 10, "Cataloging knowledge files...")
 
+    # List what we're working with
+    knowledge_dir = project.knowledge_dir
+    if knowledge_dir.exists():
+        files = [f.name for f in knowledge_dir.rglob("*") if f.is_file() and not f.name.startswith(".")]
+        _emit_log(manager, job_id, f"Found {len(files)} knowledge files")
+        for f in files[:10]:
+            _emit_log(manager, job_id, f"  {f}")
+        if len(files) > 10:
+            _emit_log(manager, job_id, f"  ...and {len(files) - 10} more")
+
     # Parse structured codes first (no AI needed)
+    _emit_log(manager, job_id, "Parsing cheat code files...")
     from rommer.knowledge.code_parser import parse_project_codes
     codes_found = parse_project_codes(project)
     manager.emit_progress(job_id, "Code parsing", 40, f"Found {codes_found} codes")
+    _emit_log(manager, job_id, f"Parsed {codes_found} codes as golden discoveries")
 
     # Agent-driven analysis of remaining resources
+    _emit_log(manager, job_id, "Starting agent analysis of supplementary resources...")
     manager.emit_progress(job_id, "Agent analysis", 60, "Analyzing supplementary resources...")
     from rommer.agents.knowledge_analyzer import KnowledgeAnalyzer
     analyzer = KnowledgeAnalyzer(project)
@@ -71,6 +121,7 @@ def run_knowledge_analysis(manager: JobManager, job_id: str, project: Project, c
     if result:
         staged = analyzer.complete(result)
         discoveries = len(staged)
+        _emit_log(manager, job_id, f"Agent proposed {discoveries} candidate discoveries")
 
     total = codes_found + discoveries
     manager.complete_job(job_id, f"Found {total} discoveries ({codes_found} from codes, {discoveries} from analysis)")
