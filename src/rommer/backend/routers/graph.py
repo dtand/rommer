@@ -3,6 +3,7 @@
 import json
 
 from fastapi import APIRouter, Query
+from pydantic import BaseModel
 
 from rommer.config import Project
 
@@ -64,17 +65,43 @@ def get_discoveries(project: str = Query(...), tier: str = Query(default=None)):
         return {"error": f"Project '{project}' not found"}
 
     conn = p.get_db()
-    query = "SELECT label, address, data_type, tier, confidence, discovered_by_node FROM discovery"
-    params = []
-    if tier:
-        query += " WHERE tier = ?"
-        params.append(tier)
-    query += " ORDER BY address"
-
-    rows = conn.execute(query, params).fetchall()
+    try:
+        query = "SELECT id, label, address, data_type, tier, confidence, discovered_by_node, source, notes FROM discovery"
+        params: list[str] = []
+        if tier:
+            query += " WHERE tier = ?"
+            params.append(tier)
+        query += " ORDER BY address"
+        rows = conn.execute(query, params).fetchall()
+    except Exception:
+        rows = []
     conn.close()
 
     return {"discoveries": [dict(r) for r in rows]}
+
+
+class TierUpdate(BaseModel):
+    tier: str  # 'golden' or 'scratch'
+
+
+@router.patch("/graph/discoveries/{discovery_id}/tier")
+def update_discovery_tier(discovery_id: int, body: TierUpdate, project: str = Query(...)):
+    """Promote or demote a discovery's tier."""
+    if body.tier not in ("golden", "scratch"):
+        return {"error": "tier must be 'golden' or 'scratch'"}
+
+    p = Project(project)
+    if not p.exists():
+        return {"error": f"Project '{project}' not found"}
+
+    conn = p.get_db()
+    conn.execute(
+        "UPDATE discovery SET tier = ? WHERE id = ?",
+        (body.tier, discovery_id),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "id": discovery_id, "tier": body.tier}
 
 
 @router.get("/graph/sections")

@@ -16,6 +16,16 @@ async function postJson<T>(path: string, body?: unknown): Promise<T> {
   return res.json();
 }
 
+async function patchJson<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
 async function postFormData<T>(path: string, formData: FormData): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
@@ -45,8 +55,13 @@ export const api = {
   graphNodes: (project: string) =>
     fetchJson<{ nodes: Record<string, unknown>[] }>(`/graph/nodes?project=${project}`),
 
-  discoveries: (project: string) =>
-    fetchJson<{ discoveries: Record<string, unknown>[] }>(`/graph/discoveries?project=${project}`),
+  discoveries: (project: string, tier?: string) => {
+    const params = tier ? `&tier=${tier}` : '';
+    return fetchJson<{ discoveries: Record<string, unknown>[] }>(`/graph/discoveries?project=${project}${params}`);
+  },
+
+  updateDiscoveryTier: (project: string, discoveryId: number, tier: string) =>
+    patchJson<{ ok: boolean }>(`/graph/discoveries/${discoveryId}/tier?project=${project}`, { tier }),
 
   sections: (project: string) =>
     fetchJson<{ sections: Record<string, unknown>[] }>(`/graph/sections?project=${project}`),
