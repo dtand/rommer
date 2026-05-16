@@ -31,7 +31,7 @@ export function ProjectView() {
   }
 
   return (
-    <div className="p-8 max-w-5xl overflow-auto h-full">
+    <div className="p-8 h-full overflow-y-auto">
       {/* Header */}
       <div className="mb-8">
         <div className="text-[10px] uppercase tracking-widest text-cyber-muted mb-1 font-bold">

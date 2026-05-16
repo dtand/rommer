@@ -37,7 +37,7 @@ export function AppShell() {
           <div className="text-[10px] text-text-muted font-mono">ROMMER v0.1</div>
         </div>
       </nav>
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-hidden">
         <Outlet />
       </main>
     </div>
