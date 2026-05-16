@@ -104,16 +104,20 @@ def _store_results(project: Project, results: dict):
              node.get("description"), node.get("section_ref"),
              node.get("goal"), node.get("success_criteria"),
              node.get("order_index", i), node.get("action_type"),
-             node.get("estimated_inputs"), json.dumps(node.get("discovery_hints", [])),
+             json.dumps(node.get("estimated_inputs")) if isinstance(node.get("estimated_inputs"), list) else node.get("estimated_inputs"),
+             json.dumps(node.get("discovery_hints", [])),
              json.dumps(node.get("tags", []))),
         )
 
     # Store edges
     for edge in graph.get("edges", []):
-        conn.execute(
-            "INSERT INTO graph_edge (project_id, from_node, to_node, edge_type) VALUES (?, ?, ?, ?)",
-            (project_id, edge.get("from_node"), edge.get("to_node"), edge.get("edge_type")),
-        )
+        from_node = edge.get("from_node") or edge.get("from")
+        to_node = edge.get("to_node") or edge.get("to")
+        if from_node and to_node:
+            conn.execute(
+                "INSERT INTO graph_edge (project_id, from_node, to_node, edge_type) VALUES (?, ?, ?, ?)",
+                (project_id, from_node, to_node, edge.get("edge_type") or edge.get("type")),
+            )
 
     conn.commit()
     conn.close()
