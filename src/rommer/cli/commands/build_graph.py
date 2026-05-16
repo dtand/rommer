@@ -19,6 +19,106 @@ def handler(args):
         print(f"  Model: {args.model}")
         return
 
-    # TODO: Import and run preprocessor pipeline
-    print("Error: build-graph execution not yet implemented")
-    raise SystemExit(1)
+    from rommer.preprocessor.pipeline import run_pipeline
+    from rommer.db.models import init_db
+
+    # Ensure DB has schema
+    conn = project.get_db()
+    init_db(conn)
+    conn.close()
+
+    print(f"Running build-graph for: {args.project}")
+    print(f"Model: {args.model}")
+    print()
+
+    results = run_pipeline(project, model=args.model)
+
+    print()
+    print("=== Pipeline Complete ===")
+    if "graph" in results:
+        graph = results["graph"]
+        print(f"  Nodes: {len(graph.get('nodes', []))}")
+        print(f"  Edges: {len(graph.get('edges', []))}")
+
+    # Store results in DB
+    _store_results(project, results)
+
+
+def _store_results(project: Project, results: dict):
+    """Store pipeline results in the project database."""
+    import json
+
+    conn = project.get_db()
+
+    # Get or create project row
+    row = conn.execute("SELECT id FROM project LIMIT 1").fetchone()
+    if not row:
+        conn.execute(
+            "INSERT INTO project (game_id, game_title) VALUES (?, ?)",
+            (project.name, project.name),
+        )
+        conn.commit()
+        row = conn.execute("SELECT id FROM project LIMIT 1").fetchone()
+    project_id = row[0]
+
+    # Store sections (pass 1)
+    section_map = results.get("section_map", {})
+    for section in section_map.get("sections", []):
+        conn.execute(
+            """INSERT OR REPLACE INTO section
+               (project_id, section_id, title, type, line_start, line_end, description)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (project_id, section.get("section_id"), section.get("title"),
+             section.get("type"), section.get("line_start"), section.get("line_end"),
+             section.get("description")),
+        )
+
+    # Store game systems (pass 2)
+    systems = results.get("systems", {})
+    for system in systems.get("game_systems", []):
+        conn.execute(
+            """INSERT OR REPLACE INTO game_system (project_id, name, description, table_names)
+               VALUES (?, ?, ?, ?)""",
+            (project_id, system.get("name"), system.get("description"),
+             json.dumps(system.get("table_names", []))),
+        )
+
+    # Store control mappings
+    for ctrl in systems.get("control_mappings", []):
+        conn.execute(
+            """INSERT INTO control_mapping (project_id, context, button, action)
+               VALUES (?, ?, ?, ?)""",
+            (project_id, ctrl.get("context"), ctrl.get("button"), ctrl.get("action")),
+        )
+
+    # Store graph nodes (pass 4)
+    graph = results.get("graph", {})
+    for i, node in enumerate(graph.get("nodes", [])):
+        conn.execute(
+            """INSERT OR REPLACE INTO graph_node
+               (project_id, node_id, name, title, description, section_ref,
+                goal, success_criteria, order_index, action_type,
+                estimated_inputs, discovery_hints, tags)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (project_id, node.get("node_id"), node.get("name"), node.get("title"),
+             node.get("description"), node.get("section_ref"),
+             node.get("goal"), node.get("success_criteria"),
+             node.get("order_index", i), node.get("action_type"),
+             node.get("estimated_inputs"), json.dumps(node.get("discovery_hints", [])),
+             json.dumps(node.get("tags", []))),
+        )
+
+    # Store edges
+    for edge in graph.get("edges", []):
+        conn.execute(
+            "INSERT INTO graph_edge (project_id, from_node, to_node, edge_type) VALUES (?, ?, ?, ?)",
+            (project_id, edge.get("from_node"), edge.get("to_node"), edge.get("edge_type")),
+        )
+
+    conn.commit()
+    conn.close()
+
+    node_count = len(graph.get("nodes", []))
+    edge_count = len(graph.get("edges", []))
+    if node_count:
+        print(f"  Stored {node_count} nodes, {edge_count} edges in DB")
