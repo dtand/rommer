@@ -9,8 +9,10 @@ import re
 from ghidra.program.model.symbol import SourceType
 from ghidra.program.model.listing import CodeUnit
 
-script_dir = os.path.dirname(sourceFile.getAbsolutePath()) if 'sourceFile' in dir() else os.getcwd()
-label_file = os.path.join(script_dir, "discovery_labels.json")
+label_file = os.environ.get("ROMMER_LABELS_FILE")
+if not label_file:
+    script_dir = os.path.dirname(sourceFile.getAbsolutePath()) if 'sourceFile' in dir() else os.getcwd()
+    label_file = os.path.join(script_dir, "discovery_labels.json")
 
 if not os.path.exists(label_file):
     print("Label file not found: " + label_file)

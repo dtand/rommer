@@ -222,9 +222,10 @@ def run_ghidra_decompile(manager: JobManager, job_id: str, project: Project, con
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "functions").mkdir(exist_ok=True)
 
-    # Set env var so export script knows where to write
+    # Set env vars so Ghidra scripts know where to read/write
     env = os.environ.copy()
     env["ROMMER_OUTPUT_DIR"] = str(output_dir)
+    env["ROMMER_LABELS_FILE"] = str(ghidra_project_dir / "discovery_labels.json")
 
     # Build the command
     cmd = [
@@ -237,6 +238,7 @@ def run_ghidra_decompile(manager: JobManager, job_id: str, project: Project, con
         "-loader", "BinaryLoader",
         "-loader-baseAddr", "0x08000000",
         "-preScript", str(scripts_dir / "setup_memory.py"),
+        "-preScript", str(scripts_dir / "import_labels.py"),
         "-postScript", str(scripts_dir / "export_decompiled.py"),
         "-postScript", str(scripts_dir / "export_split.py"),
         "-scriptPath", str(scripts_dir),
