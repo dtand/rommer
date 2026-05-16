@@ -193,13 +193,18 @@ class JobManager:
         })
 
     def _run_worker(self, job_id: str):
-        """Execute the job's worker function in a background thread."""
+        """Execute the job's worker function in a background thread.
+
+        Creates a NEW JobManager instance per thread to avoid
+        shared DB connection issues with SQLite threading.
+        """
         from rommer.jobs.worker import WORKERS
 
-        # Create a fresh DB connection for this thread
-        self._db = self._fresh_db()
+        # Each thread gets its own JobManager with its own DB connection
+        thread_mgr = JobManager(self.project)
+        thread_mgr._db = thread_mgr._fresh_db()
 
-        status = self.get_status(job_id)
+        status = thread_mgr.get_status(job_id)
         if not status:
             return
 
@@ -208,13 +213,13 @@ class JobManager:
         worker_fn = WORKERS.get(job_type)
 
         if not worker_fn:
-            self.fail_job(job_id, f"Unknown job type: {job_type}")
+            thread_mgr.fail_job(job_id, f"Unknown job type: {job_type}")
             return
 
         try:
-            worker_fn(self, job_id, self.project, config)
+            worker_fn(thread_mgr, job_id, self.project, config)
         except Exception as e:
-            self.fail_job(job_id, str(e))
+            thread_mgr.fail_job(job_id, str(e))
 
     def create_parallel_jobs(
         self, job_type: str, config: dict, parallel: int, merge_strategy: str = "union"
