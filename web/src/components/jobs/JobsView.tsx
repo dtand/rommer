@@ -201,26 +201,32 @@ function JobDetail({ job, liveLogs }: { job: Job; liveLogs: LogEntry[] }) {
 
       {/* Event log */}
       <div className="flex-1 overflow-y-auto p-4 font-mono text-xs">
-        {events.length === 0 && liveLogs.length === 0 ? (
-          <div className="text-text-muted">No events yet...</div>
-        ) : (
-          <div className="space-y-1">
-            {/* Show live WS logs if available (running job), otherwise DB events (completed) */}
-            {liveLogs.length > 0 ? (
-              liveLogs.map((log, i) => (
+        {(() => {
+          // Running jobs: show live WS logs. Completed/failed: show DB events.
+          const isRunning = job.status === 'running';
+          const showLive = isRunning && liveLogs.length > 0;
+          const logs = showLive ? liveLogs : [];
+          const dbEvents = !showLive ? events : [];
+
+          if (logs.length === 0 && dbEvents.length === 0) {
+            return <div className="text-text-muted">No events yet...</div>;
+          }
+
+          return (
+            <div className="space-y-1">
+              {dbEvents.map((evt) => (
+                <EventLine key={evt.id} event={evt} />
+              ))}
+              {logs.map((log, i) => (
                 <div key={`live-${i}`} className="flex gap-2">
                   <span className="text-text-muted shrink-0">{new Date(log.timestamp).toLocaleTimeString()}</span>
                   <span className="text-text-secondary">{log.message}</span>
                 </div>
-              ))
-            ) : (
-              events.map((evt) => (
-                <EventLine key={evt.id} event={evt} />
-              ))
-            )}
-            <div ref={logEndRef} />
-          </div>
-        )}
+              ))}
+              <div ref={logEndRef} />
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

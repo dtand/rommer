@@ -48,15 +48,15 @@ class BaseAgent(ABC):
         """Return the system prompt for this agent type."""
         ...
 
-    # Preamble injected into all agent system prompts
+    # Preamble injected into all agent system prompts (use .format(tmp_dir=...) )
     AGENT_PREAMBLE = """\
 WORKSPACE RULES:
 - Your working directory is the project root.
 - If you need to create temporary files (scripts, extracted data, intermediate results),
-  use the `tmp/` directory inside the project root.
-- IMPORTANT: Before you finish, DELETE all files you created in `tmp/`. Do not leave
-  artifacts in the project workspace. Only your final JSON output matters.
-- Do not modify any files outside of `tmp/` unless explicitly instructed to.
+  use the `{tmp_dir}` directory. Create it first with mkdir -p.
+- IMPORTANT: Before you finish, DELETE your temp directory: rm -rf {tmp_dir}
+  Do not leave artifacts in the project workspace. Only your final JSON output matters.
+- Do not modify any files outside of your temp directory unless explicitly instructed to.
 
 """
 
@@ -77,8 +77,11 @@ WORKSPACE RULES:
 
         Returns parsed result dict, or None if dry_run.
         """
+        import uuid
+        tmp_dir = f"tmp/{uuid.uuid4().hex[:8]}"
         context = self.build_context()
-        system_prompt = self.AGENT_PREAMBLE + self.get_system_prompt()
+        preamble = self.AGENT_PREAMBLE.format(tmp_dir=tmp_dir)
+        system_prompt = preamble + self.get_system_prompt()
 
         if dry_run:
             print(f"[{self.agent_type}] Would spawn with:")

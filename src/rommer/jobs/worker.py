@@ -93,20 +93,24 @@ def run_knowledge_analysis(manager: JobManager, job_id: str, project: Project, c
     """Analyze all knowledge resources using a tool-equipped agent."""
     model = config.get("model", "opus")
 
-    # List files
+    # Count files for progress tracking
     knowledge_dir = project.knowledge_dir
+    file_count = 0
     if knowledge_dir.exists():
         files = [f.name for f in knowledge_dir.rglob("*") if f.is_file() and not f.name.startswith(".")]
-        _emit_log(manager, job_id, f"Found {len(files)} knowledge files")
+        file_count = len(files)
+        _emit_log(manager, job_id, f"Found {file_count} knowledge files")
         for f in files:
             _emit_log(manager, job_id, f"  {f}")
 
-    # Launch agent with full tool access and streaming
-    manager.emit_progress(job_id, "Agent analysis", 20, "Agent analyzing resources...")
-    _emit_log(manager, job_id, f"Spawning knowledge analysis agent (model: {model})")
+    manager.emit_progress(job_id, "Agent analysis", 10, "Spawning agent...")
+    _emit_log(manager, job_id, f"Spawning knowledge analysis agent (model: {model}, job: {job_id})")
 
     from rommer.agents.knowledge_analyzer import KnowledgeAnalyzer
     analyzer = KnowledgeAnalyzer(project)
+
+    # Track progress based on tool calls to files
+    files_seen: set[str] = set()
 
     def on_event(event: dict):
         etype = event.get("type", "")
@@ -116,7 +120,17 @@ def run_knowledge_analysis(manager: JobManager, job_id: str, project: Project, c
                 _emit_log(manager, job_id, text[:300])
         elif etype == "agent_tool_call":
             tool = event.get("tool", "")
+            tool_input = event.get("input", {})
             _emit_log(manager, job_id, f"[tool] {tool}")
+            # Track file access for progress
+            if tool == "Read" and isinstance(tool_input, dict):
+                file_path = tool_input.get("file_path", "")
+                if file_path and "knowledge/" in file_path and file_path not in files_seen:
+                    files_seen.add(file_path)
+                    if file_count > 0:
+                        pct = min(85, 10 + int(75 * len(files_seen) / file_count))
+                        fname = file_path.split("/")[-1]
+                        manager.emit_progress(job_id, f"Analyzing: {fname}", pct, f"File {len(files_seen)}/{file_count}")
 
     result = analyzer.spawn(model=model, timeout=1800, on_event=on_event)
 

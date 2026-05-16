@@ -153,7 +153,7 @@ def invoke_streaming(
                         if block.get("type") == "text":
                             on_event({"type": "agent_text", "text": block.get("text", "")})
                         elif block.get("type") == "tool_use":
-                            on_event({"type": "agent_tool_call", "tool": block.get("name", "")})
+                            on_event({"type": "agent_tool_call", "tool": block.get("name", ""), "input": block.get("input", {})})
 
                 if event.get("type") == "result":
                     result_text = event.get("result", "")
