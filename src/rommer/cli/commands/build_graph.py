@@ -91,6 +91,30 @@ def _store_results(project: Project, results: dict):
             (project_id, ctrl.get("context"), ctrl.get("button"), ctrl.get("action")),
         )
 
+    # Store schema SQL
+    if systems.get("schema_sql"):
+        conn.execute(
+            "INSERT INTO schema_sql (project_id, sql_text) VALUES (?, ?)",
+            (project_id, systems["schema_sql"]),
+        )
+
+    # Store data tables (pass 3)
+    data = results.get("data", {})
+    for table_name, rows in data.get("tables", {}).items():
+        if not rows:
+            continue
+        columns = list(rows[0].keys()) if isinstance(rows[0], dict) else []
+        conn.execute(
+            "INSERT INTO game_data_table (project_id, table_name, column_names) VALUES (?, ?, ?)",
+            (project_id, table_name, json.dumps(columns)),
+        )
+        table_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        for i, row in enumerate(rows):
+            conn.execute(
+                "INSERT INTO game_data_row (table_id, row_index, row_data) VALUES (?, ?, ?)",
+                (table_id, i, json.dumps(row)),
+            )
+
     # Store graph nodes (pass 4)
     graph = results.get("graph", {})
     for i, node in enumerate(graph.get("nodes", [])):
