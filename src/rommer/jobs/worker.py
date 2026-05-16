@@ -114,7 +114,6 @@ def run_knowledge_analysis(manager: JobManager, job_id: str, project: Project, c
             text = event.get("text", "").strip()
             if text and len(text) > 3:
                 _emit_log(manager, job_id, text[:300])
-                manager.emit_progress(job_id, "Agent analysis", 50, text[:100])
         elif etype == "agent_tool_call":
             tool = event.get("tool", "")
             _emit_log(manager, job_id, f"[tool] {tool}")

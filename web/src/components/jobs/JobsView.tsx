@@ -205,17 +205,19 @@ function JobDetail({ job, liveLogs }: { job: Job; liveLogs: LogEntry[] }) {
           <div className="text-text-muted">No events yet...</div>
         ) : (
           <div className="space-y-1">
-            {/* Historical events from DB */}
-            {events.map((evt) => (
-              <EventLine key={evt.id} event={evt} />
-            ))}
-            {/* Live streaming logs from WebSocket */}
-            {liveLogs.map((log, i) => (
-              <div key={`live-${i}`} className="flex gap-2">
-                <span className="text-text-muted shrink-0">{new Date(log.timestamp).toLocaleTimeString()}</span>
-                <span className="text-text-secondary">{log.message}</span>
-              </div>
-            ))}
+            {/* Show live WS logs if available (running job), otherwise DB events (completed) */}
+            {liveLogs.length > 0 ? (
+              liveLogs.map((log, i) => (
+                <div key={`live-${i}`} className="flex gap-2">
+                  <span className="text-text-muted shrink-0">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                  <span className="text-text-secondary">{log.message}</span>
+                </div>
+              ))
+            ) : (
+              events.map((evt) => (
+                <EventLine key={evt.id} event={evt} />
+              ))
+            )}
             <div ref={logEndRef} />
           </div>
         )}
