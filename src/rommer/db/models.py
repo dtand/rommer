@@ -203,6 +203,19 @@ CREATE TABLE IF NOT EXISTS job_event (
     data TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_job_event_job ON job_event(job_id);
+
+-- Staging table for parallel job discoveries (merged after all complete)
+CREATE TABLE IF NOT EXISTS job_discovery (
+    id INTEGER PRIMARY KEY,
+    job_id TEXT REFERENCES job(id),
+    label TEXT NOT NULL,
+    address TEXT NOT NULL,
+    data_type TEXT,
+    confidence TEXT DEFAULT 'probable',
+    notes TEXT,
+    metadata TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_job_discovery_job ON job_discovery(job_id);
 """
 
 

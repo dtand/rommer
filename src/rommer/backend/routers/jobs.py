@@ -13,6 +13,21 @@ class JobRequest(BaseModel):
     project: str
     model: str = "opus"
     walkthrough: str | None = None
+    parallel: int = 1
+    merge_strategy: str = "union"  # union, consensus, hybrid
+
+
+def _start_job_or_parallel(mgr: JobManager, job_type: str, config: dict, req: JobRequest) -> dict:
+    """Start a single job or parallel group."""
+    if req.parallel > 1:
+        job_ids = mgr.create_parallel_jobs(
+            job_type, config, req.parallel, req.merge_strategy
+        )
+        return {"job_ids": job_ids, "parallel": req.parallel, "merge_strategy": req.merge_strategy, "status": "running"}
+    else:
+        job_id = mgr.create_job(job_type, config)
+        mgr.start_job(job_id)
+        return {"job_id": job_id, "status": "running"}
 
 
 @router.get("/jobs")
@@ -28,7 +43,6 @@ def list_jobs(project: str = Query(...)):
 @router.get("/jobs/{job_id}")
 def get_job(job_id: str):
     """Get job details."""
-    # Search across all projects for the job
     for name in Project.list_projects():
         p = Project(name)
         mgr = JobManager(p)
@@ -73,26 +87,22 @@ def cancel_job(job_id: str):
 
 @router.post("/jobs/graph-gen")
 def start_graph_gen(req: JobRequest):
-    """Start graph generation job."""
+    """Start graph generation job(s)."""
     p = Project(req.project)
     if not p.exists():
         return {"error": f"Project '{req.project}' not found"}
     mgr = JobManager(p)
-    job_id = mgr.create_job("graph_gen", {"model": req.model, "walkthrough": req.walkthrough})
-    mgr.start_job(job_id)
-    return {"job_id": job_id, "status": "running"}
+    return _start_job_or_parallel(mgr, "graph_gen", {"model": req.model, "walkthrough": req.walkthrough}, req)
 
 
 @router.post("/jobs/knowledge-analysis")
 def start_knowledge_analysis(req: JobRequest):
-    """Start knowledge analysis job."""
+    """Start knowledge analysis job(s)."""
     p = Project(req.project)
     if not p.exists():
         return {"error": f"Project '{req.project}' not found"}
     mgr = JobManager(p)
-    job_id = mgr.create_job("knowledge_analysis", {"model": req.model})
-    mgr.start_job(job_id)
-    return {"job_id": job_id, "status": "running"}
+    return _start_job_or_parallel(mgr, "knowledge_analysis", {"model": req.model}, req)
 
 
 @router.post("/jobs/ghidra-decompile")

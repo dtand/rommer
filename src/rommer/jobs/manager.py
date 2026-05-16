@@ -216,6 +216,81 @@ class JobManager:
         except Exception as e:
             self.fail_job(job_id, str(e))
 
+    def create_parallel_jobs(
+        self, job_type: str, config: dict, parallel: int, merge_strategy: str = "union"
+    ) -> list[str]:
+        """Create and start N parallel jobs with a merge step on completion.
+
+        Each job runs independently. When all complete, discoveries are merged
+        using the specified strategy.
+
+        Returns list of job IDs.
+        """
+        group_id = str(uuid.uuid4())[:12]
+        job_ids = []
+
+        for i in range(parallel):
+            job_config = {
+                **config,
+                "parallel_group": group_id,
+                "parallel_index": i,
+                "parallel_total": parallel,
+                "merge_strategy": merge_strategy,
+                "stage_discoveries": True,  # Write to job_discovery instead of discovery
+            }
+            job_id = self.create_job(job_type, job_config)
+            job_ids.append(job_id)
+
+        # Start all jobs
+        for job_id in job_ids:
+            self.start_job(job_id)
+
+        # Start a watcher thread that merges when all complete
+        watcher = threading.Thread(
+            target=self._watch_parallel_group,
+            args=(group_id, job_ids, merge_strategy),
+            daemon=True,
+        )
+        watcher.start()
+
+        return job_ids
+
+    def _watch_parallel_group(self, group_id: str, job_ids: list[str], merge_strategy: str):
+        """Wait for all parallel jobs to complete, then merge."""
+        import time
+        conn = self._fresh_db()
+
+        while True:
+            time.sleep(5)
+            statuses = []
+            for jid in job_ids:
+                row = conn.execute("SELECT status FROM job WHERE id = ?", (jid,)).fetchone()
+                statuses.append(row["status"] if row else "unknown")
+
+            # Check if all done (completed or failed)
+            if all(s in ("completed", "failed", "cancelled") for s in statuses):
+                break
+
+        # Only merge if at least one succeeded
+        completed = [jid for jid, s in zip(job_ids, statuses) if s == "completed"]
+        if not completed:
+            return
+
+        from rommer.jobs.merge import merge_discoveries
+        result = merge_discoveries(self.project, completed, merge_strategy)
+
+        # Broadcast merge result
+        _broadcast({
+            "type": "job_complete",
+            "job_id": f"merge-{group_id}",
+            "project": self.project.name,
+            "data": {
+                "summary": f"Merged {result['inserted']} discoveries from {len(completed)} agents ({merge_strategy})",
+            },
+        })
+
+        conn.close()
+
     def _get_project_id(self) -> int:
         row = self.db.execute("SELECT id FROM project LIMIT 1").fetchone()
         return row[0] if row else 0

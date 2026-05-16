@@ -122,15 +122,43 @@ def run_knowledge_analysis(manager: JobManager, job_id: str, project: Project, c
 
     discoveries = 0
     if result and isinstance(result, dict):
-        staged = analyzer.complete(result)
-        discoveries = len(staged)
-        _emit_log(manager, job_id, f"Agent discovered {discoveries} addresses")
+        stage = config.get("stage_discoveries", False)
+        if stage:
+            # Write to staging table for later merge
+            discoveries = _stage_discoveries(manager, job_id, result)
+            _emit_log(manager, job_id, f"Staged {discoveries} discoveries for merge")
+        else:
+            # Write directly to discovery table
+            staged = analyzer.complete(result)
+            discoveries = len(staged)
+            _emit_log(manager, job_id, f"Agent discovered {discoveries} addresses")
 
-        # Log observations if any
         for obs in result.get("observations", []):
             _emit_log(manager, job_id, f"  {obs}")
 
     manager.complete_job(job_id, f"Found {discoveries} discoveries")
+
+
+def _stage_discoveries(manager: JobManager, job_id: str, result: dict) -> int:
+    """Write discoveries to staging table (for parallel merge)."""
+    import json as _json
+    discoveries = result.get("discoveries", []) or result.get("candidates", [])
+    count = 0
+    for d in discoveries:
+        addr = d.get("address", "")
+        label = d.get("label", "")
+        if not addr or not label:
+            continue
+        metadata = d.get("metadata")
+        manager.db.execute(
+            "INSERT INTO job_discovery (job_id, label, address, data_type, confidence, notes, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (job_id, label, addr, d.get("data_type", "u16"),
+             d.get("confidence", "probable"), d.get("notes", ""),
+             _json.dumps(metadata) if metadata else None),
+        )
+        count += 1
+    manager.db.commit()
+    return count
 
 
 def run_ghidra_decompile(manager: JobManager, job_id: str, project: Project, config: dict):
