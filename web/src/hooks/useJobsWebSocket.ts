@@ -26,9 +26,17 @@ export function useJobsWebSocket(project: string | undefined) {
   const wsRef = useRef<WebSocket | null>(null);
   const [updates, setUpdates] = useState<Map<string, JobUpdate>>(new Map());
   const reconnectRef = useRef<ReturnType<typeof setTimeout>>();
+  const cleaningUpRef = useRef(false);
 
   const connect = useCallback(() => {
     if (!project) return;
+
+    // Close existing connection first
+    if (wsRef.current) {
+      wsRef.current.onclose = null; // Prevent reconnect on intentional close
+      wsRef.current.close();
+      wsRef.current = null;
+    }
 
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${proto}//${window.location.host}/api/ws?project=${project}`;
@@ -37,7 +45,6 @@ export function useJobsWebSocket(project: string | undefined) {
     wsRef.current = ws;
 
     ws.onopen = () => {
-      // Send periodic pings to keep alive
       const ping = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.send('ping');
       }, 30000);
@@ -89,8 +96,10 @@ export function useJobsWebSocket(project: string | undefined) {
     };
 
     ws.onclose = () => {
-      // Reconnect after 3s
-      reconnectRef.current = setTimeout(connect, 3000);
+      // Only reconnect if not cleaning up
+      if (!cleaningUpRef.current) {
+        reconnectRef.current = setTimeout(connect, 3000);
+      }
     };
 
     ws.onerror = () => {
@@ -99,10 +108,16 @@ export function useJobsWebSocket(project: string | undefined) {
   }, [project]);
 
   useEffect(() => {
+    cleaningUpRef.current = false;
     connect();
     return () => {
+      cleaningUpRef.current = true;
       clearTimeout(reconnectRef.current);
-      wsRef.current?.close();
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
   }, [connect]);
 
