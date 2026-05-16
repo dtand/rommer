@@ -1,5 +1,6 @@
 import { useParams } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi';
+import { useJobsWebSocket } from '../../hooks/useJobsWebSocket';
 import { api } from '../../api/client';
 
 interface Job {
@@ -31,12 +32,24 @@ const STATUS_COLORS: Record<string, string> = {
 export function JobsView() {
   const { name } = useParams<{ name: string }>();
   const { data, loading } = useApi(() => api.jobs(name!), [name]);
+  const wsUpdates = useJobsWebSocket(name);
 
   if (loading) {
     return <div className="p-8 text-text-muted font-mono text-sm">Loading jobs...</div>;
   }
 
-  const jobs: Job[] = data?.jobs ?? [];
+  // Merge REST data with live WebSocket updates
+  const baseJobs: Job[] = (data?.jobs as Job[]) ?? [];
+  const jobs = baseJobs.map(job => {
+    const update = wsUpdates.get(job.id);
+    if (!update) return job;
+    return {
+      ...job,
+      status: update.status || job.status,
+      progress: update.progress !== undefined ? update.progress : job.progress,
+      error: update.error || job.error,
+    };
+  });
 
   return (
     <div className="p-6 h-full overflow-y-auto">
@@ -59,7 +72,7 @@ export function JobsView() {
       ) : (
         <div className="space-y-3">
           {jobs.map((job) => (
-            <JobCard key={job.id} job={job} project={name!} />
+            <JobCard key={job.id} job={job} />
           ))}
         </div>
       )}
@@ -67,7 +80,7 @@ export function JobsView() {
   );
 }
 
-function JobCard({ job, project }: { job: Job; project: string }) {
+function JobCard({ job }: { job: Job }) {
   const isRunning = job.status === 'running';
 
   return (
@@ -77,8 +90,9 @@ function JobCard({ job, project }: { job: Job; project: string }) {
           <span className="text-sm font-mono text-text-primary">
             {TYPE_LABELS[job.type] || job.type}
           </span>
-          <span className={`text-xs font-mono ${STATUS_COLORS[job.status] || 'text-text-muted'}`}>
+          <span className={`text-xs font-mono flex items-center gap-1 ${STATUS_COLORS[job.status] || 'text-text-muted'}`}>
             {job.status}
+            {isRunning && <span className="inline-block w-1.5 h-1.5 bg-yellow-400 rounded-full animate-pulse" />}
           </span>
         </div>
         <div className="flex items-center gap-2">
