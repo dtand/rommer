@@ -4,6 +4,7 @@ import json
 import sqlite3
 import subprocess
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 
 from rommer.config import Project
@@ -47,8 +48,20 @@ class BaseAgent(ABC):
         """Return the system prompt for this agent type."""
         ...
 
-    def spawn(self, model: str = "opus", timeout: int = 3600, dry_run: bool = False) -> dict | None:
+    def spawn(
+        self,
+        model: str = "opus",
+        timeout: int = 3600,
+        dry_run: bool = False,
+        on_event: Callable[[dict], None] | None = None,
+    ) -> dict | None:
         """Launch the agent as a claude CLI subprocess.
+
+        Args:
+            model: Claude model to use
+            timeout: Max runtime in seconds
+            dry_run: If True, print what would run without executing
+            on_event: Streaming callback for live output (agent text, tool calls, etc.)
 
         Returns parsed result dict, or None if dry_run.
         """
@@ -63,28 +76,38 @@ class BaseAgent(ABC):
             print(f"  System prompt length: {len(system_prompt)} chars")
             return None
 
-        cmd = [
-            "claude", "-p", context,
-            "--model", model,
-            "--allowedTools", "Bash", "Read",
-            "--output-format", "json",
-        ]
+        # Use streaming if callback provided
+        if on_event:
+            from rommer.preprocessor.claude import invoke_streaming
+            return invoke_streaming(
+                prompt=context,
+                system_prompt=system_prompt,
+                model=model,
+                allowed_tools=self.allowed_tools,
+                add_dirs=self.add_dirs,
+                timeout=timeout,
+                on_event=on_event,
+            )
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
+        from rommer.preprocessor.claude import invoke
+        return invoke(
+            prompt=context,
+            system_prompt=system_prompt,
+            model=model,
+            allowed_tools=self.allowed_tools,
+            add_dirs=self.add_dirs,
             timeout=timeout,
-            cwd=str(self.project.root),
         )
 
-        if result.returncode != 0:
-            return {
-                "result": {"status": "error", "summary": result.stderr[:500]},
-                "candidates": [],
-            }
+    @property
+    def allowed_tools(self) -> list[str]:
+        """Tools the agent can use. Override to restrict."""
+        return ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
 
-        return self._parse_output(result.stdout)
+    @property
+    def add_dirs(self) -> list[Path]:
+        """Directories the agent can access."""
+        return [self.project.root]
 
     def complete(self, result: dict) -> list[dict]:
         """Process agent output, push candidate discoveries to DB.

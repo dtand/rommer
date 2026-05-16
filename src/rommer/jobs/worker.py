@@ -90,41 +90,48 @@ def _emit_log(manager: JobManager, job_id: str, message: str):
 
 
 def run_knowledge_analysis(manager: JobManager, job_id: str, project: Project, config: dict):
-    """Analyze all knowledge resources for discoveries."""
-    manager.emit_progress(job_id, "Scanning resources", 10, "Cataloging knowledge files...")
+    """Analyze all knowledge resources using a tool-equipped agent."""
+    model = config.get("model", "opus")
 
-    # List what we're working with
+    # List files
     knowledge_dir = project.knowledge_dir
     if knowledge_dir.exists():
         files = [f.name for f in knowledge_dir.rglob("*") if f.is_file() and not f.name.startswith(".")]
         _emit_log(manager, job_id, f"Found {len(files)} knowledge files")
-        for f in files[:10]:
+        for f in files:
             _emit_log(manager, job_id, f"  {f}")
-        if len(files) > 10:
-            _emit_log(manager, job_id, f"  ...and {len(files) - 10} more")
 
-    # Parse structured codes first (no AI needed)
-    _emit_log(manager, job_id, "Parsing cheat code files...")
-    from rommer.knowledge.code_parser import parse_project_codes
-    codes_found = parse_project_codes(project)
-    manager.emit_progress(job_id, "Code parsing", 40, f"Found {codes_found} codes")
-    _emit_log(manager, job_id, f"Parsed {codes_found} codes as golden discoveries")
+    # Launch agent with full tool access and streaming
+    manager.emit_progress(job_id, "Agent analysis", 20, "Agent analyzing resources...")
+    _emit_log(manager, job_id, f"Spawning knowledge analysis agent (model: {model})")
 
-    # Agent-driven analysis of remaining resources
-    _emit_log(manager, job_id, "Starting agent analysis of supplementary resources...")
-    manager.emit_progress(job_id, "Agent analysis", 60, "Analyzing supplementary resources...")
     from rommer.agents.knowledge_analyzer import KnowledgeAnalyzer
     analyzer = KnowledgeAnalyzer(project)
-    result = analyzer.spawn(model=config.get("model", "sonnet"))
+
+    def on_event(event: dict):
+        etype = event.get("type", "")
+        if etype == "agent_text":
+            text = event.get("text", "").strip()
+            if text and len(text) > 3:
+                _emit_log(manager, job_id, text[:300])
+                manager.emit_progress(job_id, "Agent analysis", 50, text[:100])
+        elif etype == "agent_tool_call":
+            tool = event.get("tool", "")
+            _emit_log(manager, job_id, f"[tool] {tool}")
+
+    result = analyzer.spawn(model=model, timeout=1800, on_event=on_event)
 
     discoveries = 0
-    if result:
+    if result and isinstance(result, dict):
         staged = analyzer.complete(result)
         discoveries = len(staged)
-        _emit_log(manager, job_id, f"Agent proposed {discoveries} candidate discoveries")
+        _emit_log(manager, job_id, f"Agent discovered {discoveries} addresses")
 
-    total = codes_found + discoveries
-    manager.complete_job(job_id, f"Found {total} discoveries ({codes_found} from codes, {discoveries} from analysis)")
+        # Log observations if any
+        for obs in result.get("observations", []):
+            _emit_log(manager, job_id, f"  {obs}")
+
+    manager.complete_job(job_id, f"Found {discoveries} discoveries")
 
 
 def run_ghidra_decompile(manager: JobManager, job_id: str, project: Project, config: dict):

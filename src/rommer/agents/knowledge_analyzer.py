@@ -1,4 +1,13 @@
-"""Knowledge analyzer agent - reviews supplementary resources for discoveries."""
+"""Knowledge analyzer agent - reviews all project resources for discoveries.
+
+This agent iterates over each file in knowledge/, understands its content,
+and extracts any useful information for reverse engineering. It has full
+tool access so it can:
+- Read files in any format
+- Write Python helper scripts to parse binary/encoded data
+- Run scripts to decode encrypted codes (AR v3, etc.)
+- Extract memory addresses, game data structures, symbols
+"""
 
 import json
 from pathlib import Path
@@ -7,25 +16,69 @@ from rommer.agents.base import BaseAgent
 from rommer.config import Project
 
 SYSTEM_PROMPT = """\
-You are a GBA reverse engineer analyzing supplementary game resources.
-Review the provided files and extract any information that could help with
-memory address discovery:
+You are a GBA reverse engineering expert analyzing game knowledge resources.
+You have full tool access — you can read files, write Python scripts, and run them.
 
-- Hex addresses mentioned in guides or notes
-- Memory values referenced in cheat descriptions
-- Data structure hints (struct sizes, field offsets)
-- Technical information about game internals
+Your workspace is the project directory. You are analyzing supplementary game
+resources to extract anything useful for reverse engineering.
 
-Output JSON with "candidates" array. Each candidate:
-{label, address, data_type, confidence, method: "knowledge_analysis", reasoning}
+WHAT TO LOOK FOR:
+- Memory addresses (hex values like 0x03001234)
+- Cheat codes (CodeBreaker, Action Replay, GameShark) — these contain real memory addresses
+- Game data structures (item tables, character stats, medapart data)
+- Technical information about the game's internals
+- Any symbols, labels, or named memory locations
 
-Only include entries where you can identify a specific memory address.
-If no addresses are found, return {"candidates": []}.
+HOW TO HANDLE DIFFERENT FILE TYPES:
+- Plain text (.txt, .md): Read directly, scan for hex addresses and technical info
+- Rich text (.rtf): Read and parse, extract meaningful content
+- XML documents: May be Word XML — extract text content first, then analyze
+- PDF files: Use Python to extract text if possible
+- Code files (.xml with cheat codes): Parse the code format, decode if encrypted
+- Images (.gif, .png): Note them as map resources but don't try to extract addresses
+
+FOR CHEAT CODES:
+- CodeBreaker unencrypted format: TTAAAAAA YYYY (T=type, A=address, Y=value)
+  - Type 3: 16-bit write to IWRAM (0x03000000 + offset)
+  - Type 8: 8-bit write to IWRAM
+  - Type 0: 32-bit write to EWRAM (0x02000000 + offset)
+- Action Replay v3: encrypted — write a Python decryption script if you recognize the format
+- GameShark: similar to CodeBreaker but different encoding
+- If codes appear encrypted (random-looking hex), try to identify the encryption
+  and write a decryption script
+
+APPROACH:
+1. List all files in the knowledge/ directory
+2. Process each file one at a time
+3. For complex files (encrypted codes, binary data), write a Python helper script,
+   run it, and use the output
+4. Collect all discovered addresses
+
+OUTPUT FORMAT:
+After analyzing ALL files, output a JSON object:
+{
+  "discoveries": [
+    {
+      "label": "descriptive_name",
+      "address": "0x03001234",
+      "data_type": "u16",
+      "confidence": "confirmed",
+      "notes": "Found via CodeBreaker code for 'Max Money'"
+    }
+  ],
+  "observations": [
+    "Summary of what was found in each file"
+  ]
+}
 """
 
 
 class KnowledgeAnalyzer(BaseAgent):
-    """Analyzes supplementary knowledge resources for potential discoveries."""
+    """Analyzes all knowledge resources using full tool access.
+
+    Unlike other agents, this one processes files autonomously —
+    reading, writing helper scripts, and running them as needed.
+    """
 
     @property
     def agent_type(self) -> str:
@@ -35,41 +88,87 @@ class KnowledgeAnalyzer(BaseAgent):
         return SYSTEM_PROMPT
 
     def build_context(self) -> str:
-        """Build context from all non-walkthrough knowledge resources."""
+        """Build context listing all knowledge files for the agent to process."""
         parts = []
-        parts.append("Analyze these game resources for memory addresses and technical info:\n")
+        parts.append("Analyze the knowledge resources in this project.\n")
+        parts.append(f"Project root: {self.project.root}\n")
 
+        # List all knowledge files with sizes
         knowledge_dir = self.project.knowledge_dir
-        if not knowledge_dir.exists():
-            return "No knowledge resources found."
+        if knowledge_dir.exists():
+            parts.append("Files to analyze:")
+            for f in sorted(knowledge_dir.rglob("*")):
+                if f.is_file() and not f.name.startswith("."):
+                    size = f.stat().st_size
+                    size_str = f"{size / 1024:.0f}KB" if size > 1024 else f"{size}B"
+                    rel = f.relative_to(self.project.root)
+                    parts.append(f"  {rel} ({size_str})")
 
-        # Read text-based resources (skip binary/images)
-        text_extensions = {".txt", ".md", ".rtf", ".csv", ".xml", ".json", ".cht"}
+        # Include save states info
+        saves_dir = self.project.save_states_dir
+        if saves_dir.exists():
+            save_files = [f.name for f in saves_dir.iterdir() if f.is_file()]
+            if save_files:
+                parts.append(f"\nSave states available: {', '.join(save_files)}")
 
-        for f in sorted(knowledge_dir.rglob("*")):
-            if not f.is_file():
+        # Include existing golden discoveries so agent doesn't re-discover
+        golden = self.get_golden_discoveries()
+        if golden:
+            parts.append(f"\nAlready known addresses ({len(golden)} golden discoveries) — do NOT re-discover:")
+            for d in golden[:30]:
+                parts.append(f"  {d.get('label')}: {d.get('address')} ({d.get('data_type')})")
+            if len(golden) > 30:
+                parts.append(f"  ... and {len(golden) - 30} more")
+
+        parts.append("\nProcess each file. For code files, try to decode and extract real memory addresses.")
+        parts.append("Write helper scripts if needed — you have full Bash/Read/Write/Edit/Glob/Grep access.")
+        parts.append("Output your final JSON with all discoveries at the end.")
+
+        return "\n".join(parts)
+
+    def complete(self, result: dict) -> list[dict]:
+        """Process agent output — insert discoveries into DB."""
+        if isinstance(result, str):
+            return []
+
+        discoveries = result.get("discoveries", [])
+        candidates = result.get("candidates", discoveries)
+
+        staged = []
+        for c in candidates:
+            address = c.get("address", "")
+            label = c.get("label", "")
+            if not address or not label:
                 continue
-            if f.suffix.lower() not in text_extensions:
-                continue
-            # Skip the primary walkthrough (already used for graph)
-            if "walkthrough_1" in f.name.lower() or f.name == "walkthrough.txt":
+
+            # Check for duplicate
+            existing = self.db.execute(
+                "SELECT id FROM discovery WHERE address = ? AND label = ?",
+                (address, label),
+            ).fetchone()
+            if existing:
                 continue
 
             try:
-                content = f.read_text(errors="replace")
-                # Truncate very large files
-                if len(content) > 50000:
-                    content = content[:50000] + "\n...[truncated]"
-                parts.append(f"\n--- {f.name} ---\n{content}")
+                self.db.execute(
+                    """INSERT INTO discovery
+                       (label, address, data_type, tier, confidence,
+                        source, discovery_method, notes)
+                       VALUES (?, ?, ?, ?, ?, 'knowledge_analysis', 'agent', ?)""",
+                    (
+                        label,
+                        address,
+                        c.get("data_type", "u16"),
+                        "golden" if c.get("confidence") == "confirmed" else "scratch",
+                        c.get("confidence", "probable"),
+                        c.get("notes", ""),
+                    ),
+                )
+                staged.append(c)
             except Exception:
-                continue
+                pass
 
-        # Include known golden discoveries for context
-        golden = self.get_golden_discoveries()
-        if golden:
-            parts.append(
-                "\n--- Already known addresses (do not re-discover) ---\n"
-                + json.dumps(golden[:50], indent=2)
-            )
+        if staged:
+            self.db.commit()
 
-        return "\n".join(parts)
+        return staged
