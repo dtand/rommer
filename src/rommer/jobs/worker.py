@@ -624,7 +624,7 @@ def run_function_analysis(manager: JobManager, job_id: str, project: Project, co
         return
 
     _emit_log(manager, job_id, f"Analyzing {len(chunk)} functions at level {level} (model: {model})")
-    manager.emit_progress(job_id, f"Level {level}", 5, f"0/{len(chunk)} functions")
+    manager.emit_progress(job_id, f"Level {level}: Loading", 5, f"Loading {len(chunk)} functions...")
 
     # Load call graph for augmentation data
     call_graph_path = project.src_dir / "call_graph.json"
@@ -693,6 +693,7 @@ def run_function_analysis(manager: JobManager, job_id: str, project: Project, co
         return
 
     _emit_log(manager, job_id, f"Loaded {len(func_data)} function files")
+    manager.emit_progress(job_id, f"Level {level}: Analyzing", 15, f"Agent analyzing {len(func_data)} functions...")
 
     # Spawn agent
     from rommer.agents.function_analyzer import FunctionAnalyzer
@@ -726,8 +727,10 @@ def run_function_analysis(manager: JobManager, job_id: str, project: Project, co
         staged = analyzer.complete(result)
         analyzed_count[0] = len(staged)
         _emit_log(manager, job_id, f"Analyzed {len(staged)} functions")
+        manager.emit_progress(job_id, f"Level {level}", 50, f"Analyzed {len(staged)}/{len(chunk)}, renaming files...")
 
         # Rename files for analyzed functions
+        rename_count = 0
         for a in staged:
             addr = a.get("address", "").replace("0x", "").upper()
             new_name = a.get("name", "")
@@ -755,6 +758,9 @@ def run_function_analysis(manager: JobManager, job_id: str, project: Project, co
                     new_path.write_text(content)
                     if new_path != f:
                         f.unlink()
+                    rename_count += 1
+                    pct = min(95, 50 + int(45 * rename_count / max(len(staged), 1)))
+                    manager.emit_progress(job_id, f"Level {level}", pct, f"Renamed {rename_count}/{len(staged)}")
                     _emit_log(manager, job_id, f"Renamed: {f.name} → {new_path.name}")
                 break
 
