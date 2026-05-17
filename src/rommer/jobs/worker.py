@@ -484,7 +484,9 @@ def run_dynamic_analysis(manager: JobManager, job_id: str, project: Project, con
 
     emu_env = os.environ.copy()
     mgba_lib = os.environ.get("MGBA_LIB_PATH", "/tmp/mgba-src/build")
+    mgba_python = os.environ.get("MGBA_PYTHON_PATH", "/tmp/mgba-src/build/python/lib.macosx-15.0-arm64-cpython-314")
     emu_env["DYLD_LIBRARY_PATH"] = mgba_lib
+    emu_env["PYTHONPATH"] = mgba_python + ":" + emu_env.get("PYTHONPATH", "")
 
     emu_proc = subprocess.Popen(
         emu_cmd,
