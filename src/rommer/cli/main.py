@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from rommer.cli.commands import init_project, build_graph, ghidra_decompile, launch_agent, emulator, nuke
+from rommer.cli.commands import init_project, build_graph, ghidra_decompile, launch_agent, emulator, worker, nuke
 
 
 def main():
@@ -48,6 +48,11 @@ def main():
     sp.add_argument("--headless", action="store_true", help="Run as TCP server instead of GUI")
     sp.add_argument("--port", type=int, default=9123, help="TCP port for headless mode (default: 9123)")
 
+    # worker
+    sp = subparsers.add_parser("worker", help="Manage the job worker daemon")
+    sp.add_argument("action", choices=["start", "stop", "status"], help="Daemon action")
+    sp.add_argument("--max-workers", type=int, default=4, help="Max concurrent workers (default: 4)")
+
     # nuke
     sp = subparsers.add_parser("nuke", help="Clean up node data (DB + filesystem)")
     sp.add_argument("--project", required=True, help="Project name")
@@ -68,6 +73,7 @@ def main():
         "ghidra-decompile": ghidra_decompile.handler,
         "launch-agent": launch_agent.handler,
         "emulator": emulator.handler,
+        "worker": worker.handler,
         "nuke": nuke.handler,
     }
 

@@ -66,24 +66,30 @@ class JobManager:
         return job_id
 
     def start_job(self, job_id: str) -> None:
-        """Start a job by spawning its worker in a background thread."""
+        """Queue a job for execution by the worker daemon.
+
+        Sets status to 'pending' — the daemon picks it up and runs it
+        as a subprocess. No threads spawned here.
+        """
+        # Job is already created as 'pending' by create_job().
+        # If called explicitly, ensure it's pending so daemon picks it up.
         self.db.execute(
-            "UPDATE job SET status = 'running', started_at = ? WHERE id = ?",
-            (datetime.now(timezone.utc).isoformat(), job_id),
+            "UPDATE job SET status = 'pending' WHERE id = %s" if hasattr(self.db, '_conn') else
+            "UPDATE job SET status = 'pending' WHERE id = ?",
+            (job_id,),
         )
         self.db.commit()
 
-        _broadcast({"type": "job_started", "job_id": job_id, "project": self.project.name})
-
-        # Run worker in background thread
-        thread = threading.Thread(target=self._run_worker, args=(job_id,), daemon=True)
-        thread.start()
-
     def cancel_job(self, job_id: str) -> bool:
-        """Cancel a running job."""
-        proc = self._processes.get(job_id)
-        if proc and proc.poll() is None:
-            proc.terminate()
+        """Cancel a running job by killing its process."""
+        # Try to kill by PID from DB
+        status = self.get_status(job_id)
+        if status and status.get("pid"):
+            try:
+                import os, signal
+                os.kill(status["pid"], signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
 
         self.db.execute(
             "UPDATE job SET status = 'cancelled', completed_at = ? WHERE id = ?",
@@ -95,8 +101,9 @@ class JobManager:
 
     def get_status(self, job_id: str) -> dict | None:
         """Get current job status."""
+        placeholder = "%s" if hasattr(self.db, '_conn') else "?"
         row = self.db.execute(
-            "SELECT * FROM job WHERE id = ?", (job_id,)
+            f"SELECT * FROM job WHERE id = {placeholder}", (job_id,)
         ).fetchone()
         if not row:
             return None
@@ -106,6 +113,7 @@ class JobManager:
             "status": row["status"],
             "progress": json.loads(row["progress"]) if row["progress"] else None,
             "config": json.loads(row["config"]) if row["config"] else {},
+            "pid": row.get("pid"),
             "created_at": row["created_at"],
             "started_at": row["started_at"],
             "completed_at": row["completed_at"],
@@ -133,64 +141,44 @@ class JobManager:
         ]
 
     def emit_progress(self, job_id: str, step: str, percent: int, message: str = ""):
-        """Update job progress and broadcast to WebSocket."""
+        """Update job progress — DB only (Postgres NOTIFY handles broadcast)."""
         progress = {"step": step, "percent": percent, "message": message}
+        p = "%s" if hasattr(self.db, '_conn') else "?"
         self.db.execute(
-            "UPDATE job SET progress = ? WHERE id = ?",
+            f"UPDATE job SET progress = {p} WHERE id = {p}",
             (json.dumps(progress), job_id),
         )
         self.db.execute(
-            "INSERT INTO job_event (job_id, type, data) VALUES (?, 'progress', ?)",
+            f"INSERT INTO job_event (job_id, type, data) VALUES ({p}, 'progress', {p})",
             (job_id, json.dumps(progress)),
         )
         self.db.commit()
 
-        _broadcast({
-            "type": "job_progress",
-            "job_id": job_id,
-            "project": self.project.name,
-            "data": progress,
-        })
-
     def complete_job(self, job_id: str, summary: str = ""):
-        """Mark job as completed."""
+        """Mark job as completed — DB only."""
+        p = "%s" if hasattr(self.db, '_conn') else "?"
         self.db.execute(
-            "UPDATE job SET status = 'completed', completed_at = ? WHERE id = ?",
+            f"UPDATE job SET status = 'completed', completed_at = {p} WHERE id = {p}",
             (datetime.now(timezone.utc).isoformat(), job_id),
         )
         self.db.execute(
-            "INSERT INTO job_event (job_id, type, data) VALUES (?, 'result', ?)",
+            f"INSERT INTO job_event (job_id, type, data) VALUES ({p}, 'result', {p})",
             (job_id, json.dumps({"summary": summary})),
         )
         self.db.commit()
-        self._processes.pop(job_id, None)
-
-        _broadcast({
-            "type": "job_complete",
-            "job_id": job_id,
-            "project": self.project.name,
-            "data": {"summary": summary},
-        })
 
     def fail_job(self, job_id: str, error: str):
-        """Mark job as failed."""
+        """Mark job as failed — DB only."""
+        p = "%s" if hasattr(self.db, '_conn') else "?"
         self.db.execute(
-            "UPDATE job SET status = 'failed', completed_at = ?, error = ? WHERE id = ?",
+            f"UPDATE job SET status = 'failed', completed_at = {p}, error = {p} WHERE id = {p}",
             (datetime.now(timezone.utc).isoformat(), error, job_id),
         )
         self.db.execute(
-            "INSERT INTO job_event (job_id, type, data) VALUES (?, 'error', ?)",
+            f"INSERT INTO job_event (job_id, type, data) VALUES ({p}, 'error', {p})",
             (job_id, json.dumps({"error": error})),
         )
         self.db.commit()
-        self._processes.pop(job_id, None)
-
-        _broadcast({
-            "type": "job_failed",
-            "job_id": job_id,
-            "project": self.project.name,
-            "error": error,
-        })
 
     def _run_worker(self, job_id: str):
         """Execute the job's worker function in a background thread.

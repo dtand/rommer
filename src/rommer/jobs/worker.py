@@ -73,20 +73,14 @@ def run_graph_gen(manager: JobManager, job_id: str, project: Project, config: di
 
 
 def _emit_log(manager: JobManager, job_id: str, message: str, log_type: str = "log"):
-    """Emit a log event for a job."""
+    """Emit a log event for a job — DB only (Postgres NOTIFY handles broadcast)."""
     import json as _json
+    placeholder = "%s" if hasattr(manager.db, '_conn') else "?"
     manager.db.execute(
-        "INSERT INTO job_event (job_id, type, data) VALUES (?, 'log', ?)",
+        f"INSERT INTO job_event (job_id, type, data) VALUES ({placeholder}, 'log', {placeholder})",
         (job_id, _json.dumps({"message": message, "log_type": log_type})),
     )
     manager.db.commit()
-    from rommer.jobs.manager import _broadcast
-    _broadcast({
-        "type": "job_log",
-        "job_id": job_id,
-        "project": manager.project.name,
-        "data": {"message": message, "log_type": log_type},
-    })
 
 
 def run_knowledge_analysis(manager: JobManager, job_id: str, project: Project, config: dict):

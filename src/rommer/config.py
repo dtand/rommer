@@ -122,8 +122,12 @@ class Project:
         meta.update(kwargs)
         (self._root / "project.json").write_text(json.dumps(meta, indent=2))
 
-    def get_db(self) -> sqlite3.Connection:
-        """Get a SQLite connection to the project database."""
+    def get_db(self):
+        """Get a database connection — Postgres if configured, else SQLite."""
+        from rommer.db.connection import is_postgres, PostgresConnectionWrapper, get_postgres_connection
+        if is_postgres():
+            return PostgresConnectionWrapper(get_postgres_connection())
+
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row

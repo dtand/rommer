@@ -1,20 +1,118 @@
-"""Database connection utilities."""
+"""Database connection utilities.
 
+Supports both SQLite (per-project, file-based) and Postgres (shared).
+Set DATABASE_URL env var to use Postgres, otherwise falls back to SQLite.
+"""
+
+import os
 import sqlite3
-from pathlib import Path
 
-from rommer.config import Project
+import psycopg2
+import psycopg2.extras
 
 
-def get_connection(project_name: str) -> sqlite3.Connection:
-    """Get a database connection for a project by name."""
+def get_database_url() -> str | None:
+    """Get Postgres connection URL from env."""
+    return os.environ.get("DATABASE_URL")
+
+
+def get_postgres_connection():
+    """Get a Postgres connection with dict-like row access."""
+    url = get_database_url()
+    if not url:
+        raise RuntimeError("DATABASE_URL not set")
+    conn = psycopg2.connect(url)
+    conn.autocommit = False
+    return conn
+
+
+def get_postgres_cursor(conn):
+    """Get a cursor that returns dict-like rows."""
+    return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+
+def is_postgres() -> bool:
+    """Check if we're configured for Postgres."""
+    return get_database_url() is not None
+
+
+class PostgresConnectionWrapper:
+    """Wraps psycopg2 connection to provide a sqlite3-like interface.
+
+    This allows existing code that uses conn.execute().fetchall()
+    with sqlite3.Row to work with Postgres with minimal changes.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._cursor = None
+
+    def execute(self, sql: str, params=None):
+        """Execute SQL and return self for chaining."""
+        # Convert ? placeholders to %s for psycopg2
+        sql = sql.replace("?", "%s")
+        # Convert INSERT OR REPLACE/IGNORE to Postgres
+        sql = sql.replace("INSERT OR REPLACE", "INSERT")
+        sql = sql.replace("INSERT OR IGNORE", "INSERT")
+        self._cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            self._cursor.execute(sql, params or ())
+        except psycopg2.errors.UniqueViolation:
+            self._conn.rollback()
+            self._cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        return self
+
+    def executescript(self, sql: str):
+        """Execute multiple SQL statements."""
+        cur = self._conn.cursor()
+        cur.execute(sql)
+        self._conn.commit()
+
+    def fetchone(self):
+        if self._cursor is None:
+            return None
+        row = self._cursor.fetchone()
+        return row
+
+    def fetchall(self):
+        if self._cursor is None:
+            return []
+        return self._cursor.fetchall()
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+    @property
+    def row_factory(self):
+        return None
+
+    @row_factory.setter
+    def row_factory(self, value):
+        pass  # Postgres wrapper always returns dicts
+
+
+def get_connection_for_project(project_name: str):
+    """Get a DB connection — Postgres if available, else SQLite."""
+    if is_postgres():
+        return PostgresConnectionWrapper(get_postgres_connection())
+
+    from rommer.config import Project
     project = Project(project_name)
     return project.get_db()
 
 
-def init_project_db(project: Project) -> sqlite3.Connection:
-    """Initialize a project's database with the full schema."""
-    from rommer.db.models import init_db
-    conn = project.get_db()
-    init_db(conn)
-    return conn
+def init_project_db_postgres(project_name: str):
+    """Ensure project exists in Postgres."""
+    if not is_postgres():
+        return
+    conn = get_postgres_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO project (game_id, game_title) VALUES (%s, %s) ON CONFLICT (game_id) DO NOTHING",
+        (project_name, project_name),
+    )
+    conn.commit()
+    conn.close()
