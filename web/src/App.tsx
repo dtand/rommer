@@ -7,6 +7,7 @@ import { GraphView } from './components/graph/GraphView';
 import { DataView } from './components/data/DataView';
 import { WalkthroughView } from './components/walkthrough/WalkthroughView';
 import { JobsView } from './components/jobs/JobsView';
+import { AnalysisView } from './components/analysis/AnalysisView';
 import { UploadView } from './components/upload/UploadView';
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="/project/:name/data" element={<DataView />} />
           <Route path="/project/:name/walkthrough" element={<WalkthroughView />} />
           <Route path="/project/:name/jobs" element={<JobsView />} />
+          <Route path="/project/:name/analysis" element={<AnalysisView />} />
         </Route>
       </Routes>
       <ToastContainer />

@@ -78,4 +78,21 @@ export const api = {
 
   jobEvents: (jobId: string) =>
     fetchJson<{ events: Record<string, unknown>[] }>(`/jobs/${jobId}/events`),
+
+  // Analysis
+  analysisStats: (project: string) =>
+    fetchJson<Record<string, unknown>>(`/analysis/stats?project=${project}`),
+
+  analysisFunctions: (project: string, opts?: { level?: number; system?: string; search?: string; offset?: number; limit?: number }) => {
+    const params = new URLSearchParams({ project });
+    if (opts?.level !== undefined) params.set('level', String(opts.level));
+    if (opts?.system) params.set('system', opts.system);
+    if (opts?.search) params.set('search', opts.search);
+    if (opts?.offset) params.set('offset', String(opts.offset));
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    return fetchJson<Record<string, unknown>>(`/analysis/functions?${params}`);
+  },
+
+  analysisFunction: (project: string, address: string) =>
+    fetchJson<Record<string, unknown>>(`/analysis/functions/${address}?project=${project}`),
 };

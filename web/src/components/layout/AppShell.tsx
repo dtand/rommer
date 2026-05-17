@@ -8,6 +8,7 @@ const navItems = [
   { path: '/graph', label: 'Graph', icon: '>' },
   { path: '/data', label: 'Data', icon: '#' },
   { path: '/walkthrough', label: 'Walkthrough', icon: '"' },
+  { path: '/analysis', label: 'Analysis', icon: '@' },
   { path: '/jobs', label: 'Jobs', icon: '!' },
 ];
 

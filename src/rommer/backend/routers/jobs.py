@@ -139,6 +139,23 @@ class AgentJobRequest(BaseModel):
     merge_strategy: str = "union"
 
 
+class FunctionAnalysisRequest(BaseModel):
+    project: str
+    config: dict  # contains: model, chunk, level
+
+
+@router.post("/jobs/function-analysis")
+def start_function_analysis(req: FunctionAnalysisRequest):
+    """Start function analysis job for a chunk of functions."""
+    p = Project(req.project)
+    if not p.exists():
+        return {"error": f"Project '{req.project}' not found"}
+    mgr = JobManager(p)
+    job_id = mgr.create_job("function_analysis", req.config)
+    mgr.start_job(job_id)
+    return {"job_id": job_id, "status": "running"}
+
+
 @router.post("/jobs/static-analysis")
 def start_static_analysis(req: AgentJobRequest):
     """Start static analysis agent."""

@@ -613,6 +613,154 @@ def run_build_tree(manager: JobManager, job_id: str, project: Project, config: d
     manager.complete_job(job_id, f"Call graph: {graph['total_functions']} functions, {graph['max_depth']} levels")
 
 
+def run_function_analysis(manager: JobManager, job_id: str, project: Project, config: dict):
+    """Analyze a chunk of functions for the bottom-up pipeline."""
+    model = config.get("model", "opus")
+    chunk = config.get("chunk", [])  # list of {address, file_path, ...}
+    level = config.get("level", 0)
+
+    if not chunk:
+        manager.fail_job(job_id, "No functions in chunk")
+        return
+
+    _emit_log(manager, job_id, f"Analyzing {len(chunk)} functions at level {level} (model: {model})")
+    manager.emit_progress(job_id, f"Level {level}", 5, f"0/{len(chunk)} functions")
+
+    # Load call graph for augmentation data
+    call_graph_path = project.src_dir / "call_graph.json"
+    call_graph = {}
+    if call_graph_path.exists():
+        call_graph = json.loads(call_graph_path.read_text()).get("functions", {})
+
+    # Load existing function analyses (child summaries)
+    child_cache: dict[str, dict] = {}
+    try:
+        conn = project.get_db()
+        p = "%s" if hasattr(conn, '_conn') else "?"
+        rows = conn.execute(
+            f"SELECT address, name, system, description, confidence FROM function_analysis WHERE project_id = (SELECT id FROM project LIMIT 1)"
+        ).fetchall()
+        for r in rows:
+            child_cache[r["address"]] = dict(r)
+        conn.close()
+    except Exception:
+        pass
+
+    # Build function data for the agent
+    funcs_dir = project.src_dir / "functions"
+    func_data = []
+
+    for func_info in chunk:
+        addr = func_info.get("address", "")
+        name = func_info.get("name", "")
+
+        # Find the .c file
+        file_path = None
+        for f in funcs_dir.glob(f"{addr.replace('0x', '')}*.c"):
+            file_path = f
+            break
+
+        if not file_path or not file_path.exists():
+            continue
+
+        code = file_path.read_text()
+
+        # Get augmentation from call graph
+        cg_entry = call_graph.get(name, {})
+        callees = cg_entry.get("callees", [])
+
+        # Build child summaries
+        child_summaries = []
+        for callee in callees:
+            callee_entry = call_graph.get(callee, {})
+            callee_addr = callee_entry.get("address", "")
+            if callee_addr in child_cache:
+                child_summaries.append(child_cache[callee_addr])
+
+        func_data.append({
+            "address": addr,
+            "original_name": name,
+            "code": code,
+            "file_path": str(file_path),
+            "child_summaries": child_summaries,
+            "discovery_refs": cg_entry.get("discovery_refs"),
+            "io_registers": cg_entry.get("io_registers"),
+            "level": level,
+        })
+
+    if not func_data:
+        manager.complete_job(job_id, "No function files found for chunk")
+        return
+
+    _emit_log(manager, job_id, f"Loaded {len(func_data)} function files")
+
+    # Spawn agent
+    from rommer.agents.function_analyzer import FunctionAnalyzer
+    analyzer = FunctionAnalyzer(project, functions=func_data)
+
+    analyzed_count = [0]
+
+    def on_event(event: dict):
+        etype = event.get("type", "")
+        if etype == "agent_text":
+            text = event.get("text", "").strip()
+            if text and len(text) > 3:
+                _emit_log(manager, job_id, text[:500], "log")
+        elif etype == "agent_thinking":
+            text = event.get("text", "").strip()
+            if text and len(text) > 3:
+                _emit_log(manager, job_id, text[:500], "thinking")
+        elif etype == "agent_tool_call":
+            tool = event.get("tool", "")
+            tool_input = event.get("input", {})
+            detail = ""
+            if tool == "Bash":
+                detail = f": {tool_input.get('command', '')[:200]}"
+            elif tool == "Read":
+                detail = f": {tool_input.get('file_path', '')}"
+            _emit_log(manager, job_id, f"[{tool}]{detail}", "tool_call")
+
+    result = analyzer.spawn(model=model, timeout=3600, on_event=on_event)
+
+    if result:
+        staged = analyzer.complete(result)
+        analyzed_count[0] = len(staged)
+        _emit_log(manager, job_id, f"Analyzed {len(staged)} functions")
+
+        # Rename files for analyzed functions
+        for a in staged:
+            addr = a.get("address", "").replace("0x", "").upper()
+            new_name = a.get("name", "")
+            if not addr or not new_name or new_name.startswith("FUN_"):
+                continue
+
+            for f in funcs_dir.glob(f"{addr}*.c"):
+                new_path = f.parent / f"{addr}_{new_name}.c"
+                if new_path != f:
+                    # Add header comment
+                    content = f.read_text()
+                    header = (
+                        f"// Function: {new_name}\n"
+                        f"// Address:  0x{addr}\n"
+                        f"// System:   {a.get('system', 'unknown')}\n"
+                        f"// Confidence: {a.get('confidence', 0)}\n"
+                        f"// Completeness: {a.get('completeness', 0)}\n"
+                        f"//\n"
+                        f"// {a.get('description', '')}\n"
+                    )
+                    # Replace existing header
+                    if content.startswith("// Function:"):
+                        content = content[content.index("\n\n") + 2:]
+                    content = header + "\n" + content
+                    new_path.write_text(content)
+                    if new_path != f:
+                        f.unlink()
+                    _emit_log(manager, job_id, f"Renamed: {f.name} → {new_path.name}")
+                break
+
+    manager.complete_job(job_id, f"Analyzed {analyzed_count[0]}/{len(chunk)} functions at level {level}")
+
+
 # Registry of job types to worker functions
 WORKERS = {
     "graph_gen": run_graph_gen,
@@ -626,4 +774,5 @@ WORKERS = {
     "forward_decl": run_refactor_forward_decl,
     "struct_annotator": run_refactor_struct_annotator,
     "system_tracer": run_refactor_system_tracer,
+    "function_analysis": run_function_analysis,
 }

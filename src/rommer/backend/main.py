@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from rommer.backend.routers import project, graph, upload, jobs, ws
+from rommer.backend.routers import project, graph, upload, jobs, ws, analysis
 from rommer.db.connection import is_postgres
 
 
@@ -121,3 +121,4 @@ app.include_router(graph.router, prefix="/api")
 app.include_router(upload.router, prefix="/api")
 app.include_router(jobs.router, prefix="/api")
 app.include_router(ws.router, prefix="/api")
+app.include_router(analysis.router, prefix="/api")
