@@ -604,7 +604,8 @@ def run_build_tree(manager: JobManager, job_id: str, project: Project, config: d
     manager.emit_progress(job_id, "Building tree", 10, "Parsing function calls...")
 
     from rommer.cli.commands.build_tree import build_call_graph
-    graph = build_call_graph(project.src_dir)
+    platform = config.get("platform", project.project_json.get("platform", "gba"))
+    graph = build_call_graph(project.src_dir, platform=platform)
 
     _emit_log(manager, job_id, f"Tree built: {graph['total_functions']} functions, {graph['max_depth']} levels deep")
     _emit_log(manager, job_id, f"  Leaves: {graph['leaf_count']}, Roots: {graph['root_count']}, Cycles: {graph['cycle_count']}")

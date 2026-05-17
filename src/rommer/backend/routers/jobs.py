@@ -117,6 +117,20 @@ def start_ghidra_decompile(req: JobRequest):
     return {"job_id": job_id, "status": "running"}
 
 
+@router.post("/jobs/build-tree")
+def start_build_tree(req: JobRequest):
+    """Build function call graph from decompiled code."""
+    p = Project(req.project)
+    if not p.exists():
+        return {"error": f"Project '{req.project}' not found"}
+    mgr = JobManager(p)
+    # Platform comes from project metadata
+    platform = p.project_json.get("platform", "gba")
+    job_id = mgr.create_job("build_tree", {"platform": platform})
+    mgr.start_job(job_id)
+    return {"job_id": job_id, "status": "running"}
+
+
 class AgentJobRequest(BaseModel):
     project: str
     model: str = "opus"

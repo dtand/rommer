@@ -27,7 +27,8 @@ def handler(args):
         print("Error: no decompiled function files found. Run ghidra-decompile first.")
         raise SystemExit(1)
 
-    graph = build_call_graph(src_dir)
+    platform = project.project_json.get("platform", "gba")
+    graph = build_call_graph(src_dir, platform=platform)
 
     # Save
     output_path = src_dir / "call_graph.json"
@@ -69,7 +70,40 @@ def handler(args):
             print(f"    ... and {len(io_funcs) - 10} more")
 
 
-def build_call_graph(src_dir: Path) -> dict:
+def _get_platform_io_registers(platform: str) -> dict[str, str]:
+    """Get IO register map for a platform."""
+    if platform == "gba":
+        return {
+            "0x04000000": "REG_DISPCNT (display control)",
+            "0x04000004": "REG_DISPSTAT (display status)",
+            "0x04000006": "REG_VCOUNT (vertical counter)",
+            "0x04000008": "REG_BG0CNT",
+            "0x0400000a": "REG_BG1CNT",
+            "0x0400000c": "REG_BG2CNT",
+            "0x0400000e": "REG_BG3CNT",
+            "0x04000010": "REG_BG0HOFS",
+            "0x04000040": "REG_WIN0H",
+            "0x04000050": "REG_BLDCNT (blend control)",
+            "0x04000060": "REG_SOUND1CNT_L",
+            "0x04000080": "REG_SOUNDCNT_L",
+            "0x040000b0": "REG_DMA0SAD",
+            "0x040000bc": "REG_DMA1SAD",
+            "0x040000c8": "REG_DMA2SAD",
+            "0x040000d4": "REG_DMA3SAD",
+            "0x04000100": "REG_TM0CNT_L (timer 0)",
+            "0x04000104": "REG_TM1CNT_L (timer 1)",
+            "0x04000108": "REG_TM2CNT_L (timer 2)",
+            "0x0400010c": "REG_TM3CNT_L (timer 3)",
+            "0x04000130": "REG_KEYINPUT (key input)",
+            "0x04000200": "REG_IE (interrupt enable)",
+            "0x04000202": "REG_IF (interrupt flags)",
+            "0x04000208": "REG_IME (interrupt master)",
+        }
+    # Future: gb, nes, snes register maps
+    return {}
+
+
+def build_call_graph(src_dir: Path, platform: str = "gba") -> dict:
     """Build a function call graph from decompiled source files.
 
     Returns a dict with graph metadata and per-function data including
@@ -89,33 +123,7 @@ def build_call_graph(src_dir: Path) -> dict:
     callers: dict[str, set[str]] = defaultdict(set)
     call_pattern = re.compile(r'\b(FUN_[0-9a-f]{8}|thunk_FUN_[0-9a-f]{8})\s*\(')
 
-    # GBA IO register patterns
-    IO_REGISTERS = {
-        "0x04000000": "REG_DISPCNT (display control)",
-        "0x04000004": "REG_DISPSTAT (display status)",
-        "0x04000006": "REG_VCOUNT (vertical counter)",
-        "0x04000008": "REG_BG0CNT",
-        "0x0400000a": "REG_BG1CNT",
-        "0x0400000c": "REG_BG2CNT",
-        "0x0400000e": "REG_BG3CNT",
-        "0x04000010": "REG_BG0HOFS",
-        "0x04000040": "REG_WIN0H",
-        "0x04000050": "REG_BLDCNT (blend control)",
-        "0x04000060": "REG_SOUND1CNT_L",
-        "0x04000080": "REG_SOUNDCNT_L",
-        "0x040000b0": "REG_DMA0SAD",
-        "0x040000bc": "REG_DMA1SAD",
-        "0x040000c8": "REG_DMA2SAD",
-        "0x040000d4": "REG_DMA3SAD",
-        "0x04000100": "REG_TM0CNT_L (timer 0)",
-        "0x04000104": "REG_TM1CNT_L (timer 1)",
-        "0x04000108": "REG_TM2CNT_L (timer 2)",
-        "0x0400010c": "REG_TM3CNT_L (timer 3)",
-        "0x04000130": "REG_KEYINPUT (key input)",
-        "0x04000200": "REG_IE (interrupt enable)",
-        "0x04000202": "REG_IF (interrupt flags)",
-        "0x04000208": "REG_IME (interrupt master)",
-    }
+    IO_REGISTERS = _get_platform_io_registers(platform)
     io_pattern = re.compile(r'0x0400[0-9a-fA-F]{4}')
 
     # Memory region patterns
