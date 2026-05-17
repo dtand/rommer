@@ -75,14 +75,29 @@ IMPORTANT RULES:
 - Do NOT add comments explaining the code (that's also later)
 - ONLY clean up Ghidra artifacts into standard C
 - Preserve the exact semantics — the cleaned code must do the same thing
-- Output the complete cleaned function file content
+
+SYNTAX VERIFICATION:
+After cleaning each function, you MUST verify it passes a syntax check.
+For each cleaned function, write it to a temp file and run:
+
+  gcc -fsyntax-only -std=c99 -w -include {include_dir}/ghidra_types.h <file>
+
+- Use -w to suppress warnings (we only care about errors)
+- If it fails, read the error, fix the code, and re-verify
+- Common fixes: add missing declarations, fix cast syntax, add missing semicolons
+- Functions may reference undefined symbols (other functions, globals) — that's OK,
+  those will cause "undeclared" errors which you should ignore. Focus on syntax errors
+  from YOUR transformations (bad casts, missing parens, etc.)
+- If a function still has syntax errors after 2 fix attempts, output it as-is
+  with a note about the remaining error
 
 OUTPUT: JSON array with one entry per function:
 [
-  {
+  {{
     "address": "0x08001FF8",
-    "cleaned_code": "// Function: FUN_08001ff8\\n// Address: 0x08001FF8\\n..."
-  }
+    "cleaned_code": "// Function: FUN_08001ff8\\n// Address: 0x08001FF8\\n...",
+    "syntax_ok": true
+  }}
 ]
 """
 
@@ -99,11 +114,13 @@ class CodeCleanupAgent(BaseAgent):
         return "code_cleanup"
 
     def get_system_prompt(self) -> str:
-        return SYSTEM_PROMPT
+        include_dir = self.project.src_dir / "include"
+        return SYSTEM_PROMPT.format(include_dir=include_dir)
 
     def build_context(self) -> str:
         parts = []
-        parts.append(f"Clean up these {len(self.functions)} Ghidra-decompiled functions:\n")
+        parts.append(f"Clean up these {len(self.functions)} Ghidra-decompiled functions:")
+        parts.append(f"Include directory for syntax check: {self.project.src_dir / 'include'}\n")
 
         for func in self.functions:
             parts.append(f"--- FUNCTION: {func['address']} ---")
