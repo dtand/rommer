@@ -175,59 +175,104 @@ def _stage_discoveries(manager: JobManager, job_id: str, result: dict) -> int:
     return count
 
 
-def run_ghidra_decompile(manager: JobManager, job_id: str, project: Project, config: dict):
-    """Run full Ghidra decompilation in a single headless call.
+def _run_ghidra_cmd(cmd: list[str], env: dict, manager: JobManager, job_id: str, phase: str, base_pct: int) -> int:
+    """Run a Ghidra headless command with streaming log output. Returns exit code."""
+    import subprocess
 
-    One analyzeHeadless invocation:
-    - Import ROM at 0x08000000 (ARM:LE:32:v4t)
-    - Add memory regions (IWRAM, EWRAM, etc.) via preScript
-    - Auto-analyze
-    - Export all decompiled functions via postScript
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+
+    func_count = 0
+    for line in proc.stdout:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Parse Ghidra output for progress updates
+        if "Importing" in line:
+            manager.emit_progress(job_id, f"{phase}: Importing", base_pct + 5, line[:100])
+        elif "Analyzing" in line or "analysis" in line.lower():
+            manager.emit_progress(job_id, f"{phase}: Analyzing", base_pct + 15, line[:100])
+        elif "decompiled" in line.lower():
+            try:
+                parts = line.split()
+                for i, p in enumerate(parts):
+                    if "decompiled" in p.lower() and i > 0:
+                        func_count = int(parts[i - 1].replace(",", ""))
+            except (ValueError, IndexError):
+                pass
+            manager.emit_progress(job_id, f"{phase}: Decompiling", min(base_pct + 35, 95), f"{func_count} functions...")
+        elif "Processed" in line and "functions" in line:
+            _emit_log(manager, job_id, line[:200])
+            try:
+                parts = line.split()
+                for i, p in enumerate(parts):
+                    if p == "functions":
+                        func_count = int(parts[i - 1].replace(",", ""))
+            except (ValueError, IndexError):
+                pass
+
+        _emit_log(manager, job_id, line[:200])
+
+    proc.wait()
+    return proc.returncode
+
+
+def run_ghidra_decompile(manager: JobManager, job_id: str, project: Project, config: dict):
+    """Run Ghidra decompilation in a single headless call.
+
+    Imports ROM at 0x08000000 via BinaryLoader, sets up GBA memory map,
+    creates entry point, imports discovery labels, analyzes, and exports.
     """
     import os
     import shutil
     import subprocess
 
-    # Find analyzeHeadless
     ghidra_headless = os.environ.get("GHIDRA_HEADLESS", "/Applications/ghidra_12.0_PUBLIC/support/analyzeHeadless")
     if not os.path.exists(ghidra_headless):
-        # Try homebrew path
         ghidra_headless = "/opt/homebrew/Cellar/ghidra/12.0/libexec/support/analyzeHeadless"
     if not os.path.exists(ghidra_headless):
-        raise FileNotFoundError(f"analyzeHeadless not found. Set GHIDRA_HEADLESS env var.")
+        raise FileNotFoundError("analyzeHeadless not found. Set GHIDRA_HEADLESS env var.")
 
     rom_path = project.rom_path
     if not rom_path.exists():
         raise FileNotFoundError(f"ROM not found: {rom_path}")
 
-    # Scripts directory
     from pathlib import Path
     scripts_dir = Path(__file__).parent.parent / "static_analysis" / "ghidra_scripts"
 
-    # Ghidra project directory (temporary, within project workspace)
     ghidra_project_dir = project.ghidra_dir
     ghidra_project_dir.mkdir(parents=True, exist_ok=True)
     project_name = project.name.replace("-", "_")
 
-    # Export discovery labels for import script
+    # Clean old Ghidra project
+    old_rep = ghidra_project_dir / f"{project_name}.rep"
+    old_gpr = ghidra_project_dir / f"{project_name}.gpr"
+    if old_rep.exists():
+        shutil.rmtree(old_rep)
+    if old_gpr.exists():
+        old_gpr.unlink()
+
+    # Clean old decompiled output
+    functions_dir = project.src_dir / "functions"
+    if functions_dir.exists():
+        shutil.rmtree(functions_dir)
+    functions_dir.mkdir(parents=True, exist_ok=True)
+
+    # Export discovery labels
     manager.emit_progress(job_id, "Preparing", 5, "Exporting discovery labels...")
     from rommer.cli.commands.ghidra_decompile import _export_labels
     _export_labels(project)
-    _emit_log(manager, job_id, f"ROM: {rom_path}")
-    _emit_log(manager, job_id, f"Ghidra project: {ghidra_project_dir}/{project_name}")
-    _emit_log(manager, job_id, f"Scripts: {scripts_dir}")
 
-    # Output directory for decompiled code
     output_dir = project.src_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "functions").mkdir(exist_ok=True)
-
-    # Set env vars so Ghidra scripts know where to read/write
     env = os.environ.copy()
     env["ROMMER_OUTPUT_DIR"] = str(output_dir)
     env["ROMMER_LABELS_FILE"] = str(ghidra_project_dir / "discovery_labels.json")
 
-    # Build the command
+    _emit_log(manager, job_id, f"ROM: {rom_path}")
+    _emit_log(manager, job_id, f"Ghidra project: {ghidra_project_dir}/{project_name}")
+
+    # Single headless call: import at 0x08000000, setup memory + entry point,
+    # import labels, auto-analyze, then export
     cmd = [
         ghidra_headless,
         str(ghidra_project_dir),
@@ -247,59 +292,15 @@ def run_ghidra_decompile(manager: JobManager, job_id: str, project: Project, con
         "-overwrite",
     ]
 
-    _emit_log(manager, job_id, f"Command: {' '.join(cmd[:6])}...")
-    manager.emit_progress(job_id, "Decompiling", 15, "Running Ghidra headless analysis...")
-    _emit_log(manager, job_id, "Starting Ghidra (this typically takes 5-15 minutes)...")
+    _emit_log(manager, job_id, "Starting Ghidra headless (this typically takes 5-15 minutes)...")
+    manager.emit_progress(job_id, "Analyzing", 15, "Running Ghidra headless analysis...")
 
-    # Run with streaming output
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        env=env,
-    )
+    rc = _run_ghidra_cmd(cmd, env, manager, job_id, "Ghidra", 15)
+    if rc != 0:
+        raise RuntimeError(f"Ghidra exited with code {rc}")
 
-    func_count = 0
-    for line in proc.stdout:
-        line = line.strip()
-        if not line:
-            continue
-
-        # Parse Ghidra output for progress updates
-        if "Importing" in line:
-            manager.emit_progress(job_id, "Importing ROM", 20, line[:100])
-        elif "Analyzing" in line or "analysis" in line.lower():
-            manager.emit_progress(job_id, "Analyzing", 40, line[:100])
-        elif "Decompiling" in line or "decompiled" in line.lower():
-            # Track function count from export script output
-            if "decompiled" in line.lower():
-                try:
-                    # Look for patterns like "1234 decompiled"
-                    parts = line.split()
-                    for i, p in enumerate(parts):
-                        if "decompiled" in p.lower() and i > 0:
-                            func_count = int(parts[i - 1].replace(",", ""))
-                except (ValueError, IndexError):
-                    pass
-            pct = min(90, 50 + (func_count // 500))
-            manager.emit_progress(job_id, "Decompiling", pct, f"{func_count} functions...")
-        elif "Done" in line or "complete" in line.lower():
-            manager.emit_progress(job_id, "Finishing", 95, line[:100])
-
-        _emit_log(manager, job_id, line[:200])
-
-    proc.wait()
-
-    if proc.returncode != 0:
-        raise RuntimeError(f"Ghidra exited with code {proc.returncode}")
-
-    # Count output files
-    functions_dir = output_dir / "functions"
-    if functions_dir.exists():
-        func_files = list(functions_dir.glob("*.c"))
-        func_count = len(func_files) if func_files else func_count
-
+    # Count output
+    func_count = len(list(functions_dir.glob("*.c"))) if functions_dir.exists() else 0
     _emit_log(manager, job_id, f"Decompilation complete: {func_count} functions")
     manager.complete_job(job_id, f"Decompiled {func_count} functions")
 
