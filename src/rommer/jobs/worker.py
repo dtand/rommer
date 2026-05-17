@@ -351,9 +351,95 @@ def _load_json(path) -> dict:
     return {}
 
 
+def _run_agent_job(agent_class, manager: JobManager, job_id: str, project: Project, config: dict):
+    """Generic worker for any agent-based job."""
+    model = config.get("model", "opus")
+    focus = config.get("focus")
+
+    agent = agent_class(project, focus=focus)
+    _emit_log(manager, job_id, f"Spawning {agent.agent_type} agent (model: {model})")
+    manager.emit_progress(job_id, "Agent running", 20, f"{agent.agent_type} analyzing...")
+
+    def on_event(event: dict):
+        etype = event.get("type", "")
+        if etype == "agent_text":
+            text = event.get("text", "").strip()
+            if text and len(text) > 3:
+                _emit_log(manager, job_id, text[:300])
+        elif etype == "agent_tool_call":
+            tool = event.get("tool", "")
+            _emit_log(manager, job_id, f"[tool] {tool}")
+
+    result = agent.spawn(model=model, timeout=1800, on_event=on_event)
+
+    discoveries = 0
+    if result and isinstance(result, dict):
+        stage = config.get("stage_discoveries", False)
+        if stage:
+            discoveries = _stage_discoveries(manager, job_id, result)
+            _emit_log(manager, job_id, f"Staged {discoveries} discoveries for merge")
+        else:
+            staged = agent.complete(result)
+            discoveries = len(staged)
+            if discoveries:
+                _emit_log(manager, job_id, f"Proposed {discoveries} discoveries")
+
+        for obs in result.get("observations", []):
+            _emit_log(manager, job_id, f"  {obs}")
+
+    summary_parts = [f"{agent.agent_type} complete"]
+    if discoveries:
+        summary_parts.append(f"{discoveries} discoveries")
+    if result and isinstance(result, dict):
+        renamed = result.get("renamed_functions", [])
+        if renamed:
+            summary_parts.append(f"{len(renamed)} functions renamed")
+        files_mod = result.get("files_modified")
+        if files_mod:
+            summary_parts.append(f"{files_mod} files modified")
+
+    manager.complete_job(job_id, " | ".join(summary_parts))
+
+
+def run_static_analysis(manager: JobManager, job_id: str, project: Project, config: dict):
+    from rommer.agents.static_analyzer import StaticAnalyzer
+    _run_agent_job(StaticAnalyzer, manager, job_id, project, config)
+
+
+def run_refactor_type_resolver(manager: JobManager, job_id: str, project: Project, config: dict):
+    from rommer.agents.refactor.type_resolver import TypeResolver
+    _run_agent_job(TypeResolver, manager, job_id, project, config)
+
+
+def run_refactor_literal_pool(manager: JobManager, job_id: str, project: Project, config: dict):
+    from rommer.agents.refactor.literal_pool import LiteralPoolResolver
+    _run_agent_job(LiteralPoolResolver, manager, job_id, project, config)
+
+
+def run_refactor_forward_decl(manager: JobManager, job_id: str, project: Project, config: dict):
+    from rommer.agents.refactor.forward_decl import ForwardDeclGenerator
+    _run_agent_job(ForwardDeclGenerator, manager, job_id, project, config)
+
+
+def run_refactor_struct_annotator(manager: JobManager, job_id: str, project: Project, config: dict):
+    from rommer.agents.refactor.struct_annotator import StructAnnotator
+    _run_agent_job(StructAnnotator, manager, job_id, project, config)
+
+
+def run_refactor_system_tracer(manager: JobManager, job_id: str, project: Project, config: dict):
+    from rommer.agents.refactor.system_tracer import SystemTracer
+    _run_agent_job(SystemTracer, manager, job_id, project, config)
+
+
 # Registry of job types to worker functions
 WORKERS = {
     "graph_gen": run_graph_gen,
     "knowledge_analysis": run_knowledge_analysis,
     "ghidra_decompile": run_ghidra_decompile,
+    "static_analysis": run_static_analysis,
+    "type_resolver": run_refactor_type_resolver,
+    "literal_pool": run_refactor_literal_pool,
+    "forward_decl": run_refactor_forward_decl,
+    "struct_annotator": run_refactor_struct_annotator,
+    "system_tracer": run_refactor_system_tracer,
 }

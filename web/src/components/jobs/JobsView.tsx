@@ -26,6 +26,12 @@ const TYPE_LABELS: Record<string, string> = {
   graph_gen: 'Graph Generation',
   knowledge_analysis: 'Knowledge Analysis',
   ghidra_decompile: 'Ghidra Decompile',
+  static_analysis: 'Static Analysis',
+  type_resolver: 'Type Resolver',
+  literal_pool: 'Literal Pool Resolver',
+  forward_decl: 'Forward Declarations',
+  struct_annotator: 'Struct Annotator',
+  system_tracer: 'System Tracer',
   agent: 'Analysis Agent',
 };
 

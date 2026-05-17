@@ -115,3 +115,44 @@ def start_ghidra_decompile(req: JobRequest):
     job_id = mgr.create_job("ghidra_decompile", {"model": req.model})
     mgr.start_job(job_id)
     return {"job_id": job_id, "status": "running"}
+
+
+class AgentJobRequest(BaseModel):
+    project: str
+    model: str = "opus"
+    focus: str | None = None
+    parallel: int = 1
+    merge_strategy: str = "union"
+
+
+@router.post("/jobs/static-analysis")
+def start_static_analysis(req: AgentJobRequest):
+    """Start static analysis agent."""
+    p = Project(req.project)
+    if not p.exists():
+        return {"error": f"Project '{req.project}' not found"}
+    mgr = JobManager(p)
+    config = {"model": req.model, "focus": req.focus}
+    job_id = mgr.create_job("static_analysis", config)
+    mgr.start_job(job_id)
+    return {"job_id": job_id, "status": "running"}
+
+
+@router.post("/jobs/refactor/{stage}")
+def start_refactor_stage(stage: str, req: AgentJobRequest):
+    """Start a refactor pipeline stage.
+
+    Stages: type_resolver, literal_pool, forward_decl, struct_annotator, system_tracer
+    """
+    valid_stages = ["type_resolver", "literal_pool", "forward_decl", "struct_annotator", "system_tracer"]
+    if stage not in valid_stages:
+        return {"error": f"Unknown stage '{stage}'. Valid: {valid_stages}"}
+
+    p = Project(req.project)
+    if not p.exists():
+        return {"error": f"Project '{req.project}' not found"}
+    mgr = JobManager(p)
+    config = {"model": req.model, "focus": req.focus}
+    job_id = mgr.create_job(stage, config)
+    mgr.start_job(job_id)
+    return {"job_id": job_id, "status": "running"}
