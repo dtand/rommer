@@ -34,7 +34,11 @@ def handler(args):
     functions = call_graph["functions"]
     max_depth = call_graph["max_depth"]
 
+    # Load already-cleaned functions
+    cleaned = _get_cleaned_addresses(project)
+
     print(f"Code Cleanup Pipeline: {call_graph['total_functions']} functions, {max_depth + 1} levels")
+    print(f"  Already cleaned: {len(cleaned)}")
     print(f"  num_nodes={num_nodes}, parallel={parallel}, model={model}")
     print()
 
@@ -43,13 +47,15 @@ def handler(args):
         level_funcs = [
             {"address": f["address"], "name": name}
             for name, f in functions.items()
-            if f.get("level") == level
+            if f.get("level") == level and f["address"] not in cleaned
         ]
 
+        total_at_level = sum(1 for f in functions.values() if f.get("level") == level)
         if not level_funcs:
+            print(f"Level {level}: all {total_at_level} functions already cleaned, skipping")
             continue
 
-        print(f"Level {level}: {len(level_funcs)} functions")
+        print(f"Level {level}: {len(level_funcs)} to clean ({total_at_level} total)")
 
         chunks = [level_funcs[i:i + num_nodes] for i in range(0, len(level_funcs), num_nodes)]
         print(f"  {len(chunks)} chunks of up to {num_nodes}")
@@ -77,14 +83,15 @@ def handler(args):
             print(f"  Waiting for {len(job_ids)} remaining...")
             _wait_for_jobs(job_ids)
 
-        print(f"  Level {level} complete")
+        cleaned = _get_cleaned_addresses(project)
+        print(f"  Level {level} complete. Total cleaned: {len(cleaned)}")
         print()
 
     # Cyclic functions
     cycle_funcs = [
         {"address": f["address"], "name": name}
         for name, f in functions.items()
-        if f.get("level") is None
+        if f.get("level") is None and f["address"] not in cleaned
     ]
     if cycle_funcs:
         print(f"Cyclic: {len(cycle_funcs)} functions")
@@ -105,7 +112,19 @@ def handler(args):
         if job_ids:
             _wait_for_jobs(job_ids)
 
-    print("Cleanup complete.")
+    cleaned = _get_cleaned_addresses(project)
+    print(f"Cleanup complete. {len(cleaned)} / {call_graph['total_functions']} functions cleaned.")
+
+
+def _get_cleaned_addresses(project) -> set[str]:
+    """Get set of already-cleaned function addresses."""
+    try:
+        conn = project.get_db()
+        rows = conn.execute("SELECT address FROM function_cleanup").fetchall()
+        conn.close()
+        return {r["address"] for r in rows}
+    except Exception:
+        return set()
 
 
 def _api_post(path: str, data: dict) -> dict:

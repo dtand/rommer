@@ -833,10 +833,28 @@ def run_code_cleanup(manager: JobManager, job_id: str, project: Project, config:
             if not addr or not cleaned:
                 continue
 
+            syntax_ok = item.get("syntax_ok", False)
+
             for f in funcs_dir.glob(f"{addr}*.c"):
                 f.write_text(cleaned)
                 cleaned_count += 1
-                _emit_log(manager, job_id, f"Cleaned: {f.name}")
+                _emit_log(manager, job_id, f"Cleaned: {f.name} (syntax: {'ok' if syntax_ok else 'errors'})")
+
+                # Track in function_cleanup table
+                try:
+                    conn = project.get_db()
+                    p = "%s" if hasattr(conn, '_conn') else "?"
+                    pid = conn.execute("SELECT id FROM project LIMIT 1").fetchone()[0]
+                    conn.execute(
+                        f"INSERT INTO function_cleanup (project_id, address, syntax_ok, cleaned_by) "
+                        f"VALUES ({p}, {p}, {p}, {p}) "
+                        f"ON CONFLICT (project_id, address) DO UPDATE SET syntax_ok = {p}, cleaned_by = {p}",
+                        (pid, f"0x{addr}", syntax_ok, job_id, syntax_ok, job_id),
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception as e:
+                    _emit_log(manager, job_id, f"DB error tracking cleanup: {e}")
                 break
 
         pct = min(95, 50 + int(45 * cleaned_count / max(len(func_data), 1)))
