@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi';
-import { useJobsWebSocket, type LogEntry } from '../../hooks/useJobsWebSocket';
+import { useProjectWebSocket, useJobWebSocket, type LogEntry } from '../../hooks/useJobsWebSocket';
 import { api } from '../../api/client';
 
 interface Job {
@@ -47,7 +47,7 @@ const STATUS_COLORS: Record<string, string> = {
 export function JobsView() {
   const { name } = useParams<{ name: string }>();
   const { data, loading } = useApi(() => api.jobs(name!), [name]);
-  const wsUpdates = useJobsWebSocket(name);
+  const wsUpdates = useProjectWebSocket(name);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
   if (loading) {
@@ -110,7 +110,7 @@ export function JobsView() {
       {/* Job detail / log panel */}
       <div className="flex-1 overflow-hidden h-full">
         {selectedJob ? (
-          <JobDetail job={selectedJob} liveLogs={wsUpdates.get(selectedJob.id)?.logs || []} />
+          <JobDetail job={selectedJob} />
         ) : (
           <div className="flex items-center justify-center h-full text-text-muted font-mono text-sm">
             Select a job to view logs
@@ -158,15 +158,35 @@ function JobRow({ job, selected, onClick }: { job: Job; selected: boolean; onCli
   );
 }
 
-function JobDetail({ job, liveLogs }: { job: Job; liveLogs: LogEntry[] }) {
+function JobDetail({ job }: { job: Job }) {
+  // Per-job WebSocket — only connects when viewing this specific job
+  const { logs: liveLogs, progress: liveProgress, status: liveStatus } = useJobWebSocket(job.id);
+  // DB events for completed jobs (WS won't have history)
   const { data } = useApi(() => api.jobEvents(job.id), [job.id]);
   const logEndRef = useRef<HTMLDivElement>(null);
   const events: JobEvent[] = (data?.events as JobEvent[]) ?? [];
 
-  // Auto-scroll to bottom when new events or live logs arrive
+  // Use live data if available, fall back to job data
+  const currentStatus = liveStatus || job.status;
+  const currentProgress = liveProgress || job.progress;
+
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [events.length, liveLogs.length]);
+
+  // Show live logs for running jobs, DB events for completed
+  const isRunning = currentStatus === 'running';
+  const showLive = isRunning && liveLogs.length > 0;
+
+  const LOG_COLORS: Record<string, string> = {
+    thinking: 'text-blue-400/70 italic',
+    tool_call: 'text-cyber-dim',
+    tool_result: 'text-text-muted',
+    progress: 'text-cyber-dim',
+    result: 'text-cyber',
+    error: 'text-red-400',
+    log: 'text-text-secondary',
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -178,8 +198,8 @@ function JobDetail({ job, liveLogs }: { job: Job; liveLogs: LogEntry[] }) {
             <div className="text-[10px] text-text-muted font-mono mt-0.5">{job.id}</div>
           </div>
           <div className="flex items-center gap-3">
-            <span className={`text-xs font-mono ${STATUS_COLORS[job.status]}`}>{job.status}</span>
-            {job.status === 'running' && (
+            <span className={`text-xs font-mono ${STATUS_COLORS[currentStatus]}`}>{currentStatus}</span>
+            {currentStatus === 'running' && (
               <button
                 onClick={() => api.cancelJob(job.id)}
                 className="text-[10px] px-2 py-1 border border-red-800 text-red-400 rounded hover:bg-red-900/20 font-mono"
@@ -189,18 +209,17 @@ function JobDetail({ job, liveLogs }: { job: Job; liveLogs: LogEntry[] }) {
             )}
           </div>
         </div>
-        {/* Progress bar */}
-        {job.progress && (
+        {currentProgress && (
           <div className="mt-3">
             <div className="flex items-center justify-between text-[10px] text-text-muted mb-1">
-              <span>{job.progress.step}</span>
-              <span>{job.progress.percent}%</span>
+              <span>{currentProgress.step}</span>
+              <span>{currentProgress.percent}%</span>
             </div>
             <div className="h-1.5 bg-surface-overlay rounded-full overflow-hidden">
-              <div className="h-full bg-cyber transition-all duration-500" style={{ width: `${job.progress.percent}%` }} />
+              <div className="h-full bg-cyber transition-all duration-500" style={{ width: `${currentProgress.percent}%` }} />
             </div>
-            {job.progress.message && (
-              <div className="text-[10px] text-text-muted mt-1">{job.progress.message}</div>
+            {currentProgress.message && (
+              <div className="text-[10px] text-text-muted mt-1">{currentProgress.message}</div>
             )}
           </div>
         )}
@@ -208,32 +227,26 @@ function JobDetail({ job, liveLogs }: { job: Job; liveLogs: LogEntry[] }) {
 
       {/* Event log */}
       <div className="flex-1 overflow-y-auto p-4 font-mono text-xs">
-        {(() => {
-          // Running jobs: show live WS logs. Completed/failed: show DB events.
-          const isRunning = job.status === 'running';
-          const showLive = isRunning && liveLogs.length > 0;
-          const logs = showLive ? liveLogs : [];
-          const dbEvents = !showLive ? events : [];
-
-          if (logs.length === 0 && dbEvents.length === 0) {
-            return <div className="text-text-muted">No events yet...</div>;
-          }
-
-          return (
-            <div className="space-y-1">
-              {dbEvents.map((evt) => (
-                <EventLine key={evt.id} event={evt} />
-              ))}
-              {logs.map((log, i) => (
-                <div key={`live-${i}`} className="flex gap-2">
-                  <span className="text-text-muted shrink-0">{new Date(log.timestamp).toLocaleTimeString()}</span>
-                  <span className="text-text-secondary">{log.message}</span>
-                </div>
-              ))}
-              <div ref={logEndRef} />
-            </div>
-          );
-        })()}
+        {showLive ? (
+          <div className="space-y-1">
+            {liveLogs.map((log, i) => (
+              <div key={`live-${i}`} className="flex gap-2">
+                <span className="text-text-muted shrink-0">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                <span className={LOG_COLORS[log.type || 'log'] || 'text-text-secondary'}>{log.message}</span>
+              </div>
+            ))}
+            <div ref={logEndRef} />
+          </div>
+        ) : events.length > 0 ? (
+          <div className="space-y-1">
+            {events.map((evt) => (
+              <EventLine key={evt.id} event={evt} />
+            ))}
+            <div ref={logEndRef} />
+          </div>
+        ) : (
+          <div className="text-text-muted">No events yet...</div>
+        )}
       </div>
     </div>
   );

@@ -150,10 +150,25 @@ def invoke_streaming(
 
                 if event.get("type") == "assistant" and on_event:
                     for block in event.get("message", {}).get("content", []):
-                        if block.get("type") == "text":
+                        btype = block.get("type", "")
+                        if btype == "text":
                             on_event({"type": "agent_text", "text": block.get("text", "")})
-                        elif block.get("type") == "tool_use":
-                            on_event({"type": "agent_tool_call", "tool": block.get("name", ""), "input": block.get("input", {})})
+                        elif btype == "thinking":
+                            text = block.get("text", "")
+                            if text:
+                                on_event({"type": "agent_thinking", "text": text})
+                        elif btype == "tool_use":
+                            on_event({
+                                "type": "agent_tool_call",
+                                "tool": block.get("name", ""),
+                                "input": block.get("input", {}),
+                            })
+                        elif btype == "tool_result":
+                            content = block.get("content", "")
+                            on_event({
+                                "type": "agent_tool_result",
+                                "output": str(content)[:500],
+                            })
 
                 if event.get("type") == "result":
                     result_text = event.get("result", "")

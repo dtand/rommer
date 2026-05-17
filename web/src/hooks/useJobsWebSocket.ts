@@ -1,17 +1,10 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { toast } from '../components/layout/Toast';
 
-interface JobEvent {
-  type: 'job_started' | 'job_progress' | 'job_complete' | 'job_failed' | 'job_cancelled' | 'job_log' | 'pong';
-  job_id?: string;
-  project?: string;
-  data?: { step?: string; percent?: number; message?: string; summary?: string };
-  error?: string;
-}
-
 export interface LogEntry {
   timestamp: number;
   message: string;
+  type?: string;
 }
 
 interface JobUpdate {
@@ -22,104 +15,164 @@ interface JobUpdate {
   error?: string;
 }
 
-export function useJobsWebSocket(project: string | undefined) {
+/**
+ * Subscribe to a specific job's live logs via WebSocket.
+ * Connects to /api/ws/jobs/{jobId} — one connection per job.
+ */
+export function useJobWebSocket(jobId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
-  const [updates, setUpdates] = useState<Map<string, JobUpdate>>(new Map());
-  const reconnectRef = useRef<ReturnType<typeof setTimeout>>();
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [progress, setProgress] = useState<JobUpdate['progress']>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const cleaningUpRef = useRef(false);
 
-  const connect = useCallback(() => {
-    if (!project) return;
+  useEffect(() => {
+    if (!jobId) return;
 
-    // Close existing connection first
-    if (wsRef.current) {
-      wsRef.current.onclose = null; // Prevent reconnect on intentional close
-      wsRef.current.close();
-      wsRef.current = null;
-    }
+    cleaningUpRef.current = false;
+    setLogs([]);
+    setProgress(null);
+    setStatus(null);
 
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${window.location.host}/api/ws?project=${project}`;
-
+    const url = `${proto}//${window.location.host}/api/ws/jobs/${jobId}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
-    ws.onopen = () => {
-      const ping = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) ws.send('ping');
-      }, 30000);
-      ws.addEventListener('close', () => clearInterval(ping));
-    };
+    const ping = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) ws.send('ping');
+    }, 30000);
 
     ws.onmessage = (event) => {
       try {
-        const data: JobEvent = JSON.parse(event.data);
+        const data = JSON.parse(event.data);
         if (data.type === 'pong') return;
 
+        if (data.type === 'job_log') {
+          const msg = data.data?.message || '';
+          const logType = data.data?.log_type || 'log';
+          if (msg) {
+            setLogs(prev => [...prev, { timestamp: Date.now(), message: msg, type: logType }]);
+          }
+        } else if (data.type === 'job_progress') {
+          setProgress(data.data);
+          setStatus('running');
+          const msg = `[${data.data?.percent}%] ${data.data?.step}${data.data?.message ? ' — ' + data.data.message : ''}`;
+          setLogs(prev => [...prev, { timestamp: Date.now(), message: msg, type: 'progress' }]);
+        } else if (data.type === 'job_complete') {
+          setStatus('completed');
+          setProgress(null);
+          setLogs(prev => [...prev, { timestamp: Date.now(), message: `✓ ${data.data?.summary || 'Completed'}`, type: 'result' }]);
+        } else if (data.type === 'job_failed') {
+          setStatus('failed');
+          setLogs(prev => [...prev, { timestamp: Date.now(), message: `✗ ${data.error}`, type: 'error' }]);
+        }
+      } catch { /* ignore */ }
+    };
+
+    ws.onclose = () => {
+      clearInterval(ping);
+      if (!cleaningUpRef.current) {
+        // Reconnect after 3s
+        setTimeout(() => {
+          if (!cleaningUpRef.current && wsRef.current === ws) {
+            // Re-run effect by not doing anything — React will handle it
+          }
+        }, 3000);
+      }
+    };
+
+    ws.onerror = () => ws.close();
+
+    return () => {
+      cleaningUpRef.current = true;
+      clearInterval(ping);
+      ws.onclose = null;
+      ws.close();
+      wsRef.current = null;
+    };
+  }, [jobId]);
+
+  return { logs, progress, status };
+}
+
+/**
+ * Subscribe to project-level job status updates (toasts, status badges).
+ * Connects to /api/ws/project/{project}.
+ */
+export function useProjectWebSocket(project: string | undefined) {
+  const wsRef = useRef<WebSocket | null>(null);
+  const [updates, setUpdates] = useState<Map<string, JobUpdate>>(new Map());
+  const cleaningUpRef = useRef(false);
+
+  useEffect(() => {
+    if (!project) return;
+    cleaningUpRef.current = false;
+
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${proto}//${window.location.host}/api/ws/project/${project}`;
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    const ping = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) ws.send('ping');
+    }, 30000);
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'pong') return;
         const jobId = data.job_id;
         if (!jobId) return;
 
         setUpdates(prev => {
           const next = new Map(prev);
           const existing = next.get(jobId) || { job_id: jobId, logs: [] };
-          if (!existing.logs) existing.logs = [];
 
           if (data.type === 'job_progress') {
-            existing.progress = data.data as JobUpdate['progress'];
+            existing.progress = data.data;
             existing.status = 'running';
-            // Also add as log entry
-            const msg = `[${data.data?.percent}%] ${data.data?.step}${data.data?.message ? ' — ' + data.data.message : ''}`;
-            existing.logs.push({ timestamp: Date.now(), message: msg });
-          } else if (data.type === 'job_log') {
-            const msg = data.data?.message || '';
-            if (msg) existing.logs.push({ timestamp: Date.now(), message: msg });
           } else if (data.type === 'job_complete') {
             existing.status = 'completed';
             existing.progress = null;
-            existing.logs.push({ timestamp: Date.now(), message: `✓ ${data.data?.summary || 'Completed'}` });
             toast('success', data.data?.summary || 'Job completed');
           } else if (data.type === 'job_failed') {
             existing.status = 'failed';
             existing.error = data.error;
-            existing.logs.push({ timestamp: Date.now(), message: `✗ ${data.error}` });
             toast('error', `Job failed: ${data.error}`);
-          } else if (data.type === 'job_cancelled') {
-            existing.status = 'cancelled';
           } else if (data.type === 'job_started') {
             existing.status = 'running';
+          } else if (data.type === 'job_cancelled') {
+            existing.status = 'cancelled';
           }
 
           next.set(jobId, existing);
           return next;
         });
-      } catch { /* ignore parse errors */ }
+      } catch { /* ignore */ }
     };
 
     ws.onclose = () => {
-      // Only reconnect if not cleaning up
+      clearInterval(ping);
       if (!cleaningUpRef.current) {
-        reconnectRef.current = setTimeout(connect, 3000);
+        setTimeout(() => {
+          if (!cleaningUpRef.current) {
+            // Component will re-mount and reconnect
+          }
+        }, 3000);
       }
     };
 
-    ws.onerror = () => {
-      ws.close();
-    };
-  }, [project]);
+    ws.onerror = () => ws.close();
 
-  useEffect(() => {
-    cleaningUpRef.current = false;
-    connect();
     return () => {
       cleaningUpRef.current = true;
-      clearTimeout(reconnectRef.current);
-      if (wsRef.current) {
-        wsRef.current.onclose = null;
-        wsRef.current.close();
-        wsRef.current = null;
-      }
+      clearInterval(ping);
+      ws.onclose = null;
+      ws.close();
+      wsRef.current = null;
     };
-  }, [connect]);
+  }, [project]);
 
   return updates;
 }

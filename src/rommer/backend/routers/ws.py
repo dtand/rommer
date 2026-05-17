@@ -1,7 +1,11 @@
-"""WebSocket endpoint for real-time job updates."""
+"""WebSocket endpoints for real-time job updates.
+
+Two channels:
+- /api/ws/jobs/{job_id} — live logs + progress for a specific job
+- /api/ws/project/{project} — job status changes + toasts for a project
+"""
 
 import asyncio
-import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -9,67 +13,92 @@ router = APIRouter()
 
 
 class ConnectionManager:
-    """Manages WebSocket connections and broadcasts events."""
+    """Manages WebSocket connections per channel."""
 
     def __init__(self):
-        self.connections: list[tuple[WebSocket, str | None]] = []  # (ws, project_filter)
+        self.channels: dict[str, list[WebSocket]] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
 
-    async def connect(self, websocket: WebSocket, project: str | None = None):
+    async def connect(self, websocket: WebSocket, channel: str):
         await websocket.accept()
-        self.connections.append((websocket, project))
+        self.channels.setdefault(channel, []).append(websocket)
 
-    def disconnect(self, websocket: WebSocket):
-        self.connections = [(ws, p) for ws, p in self.connections if ws != websocket]
+    def disconnect(self, websocket: WebSocket, channel: str):
+        if channel in self.channels:
+            self.channels[channel] = [ws for ws in self.channels[channel] if ws != websocket]
+            if not self.channels[channel]:
+                del self.channels[channel]
 
-    async def broadcast(self, event: dict):
-        """Send event to all connected clients (filtered by project if set)."""
-        event_project = event.get("project")
+    async def send_to_channel(self, channel: str, event: dict):
+        if channel not in self.channels:
+            return
         dead = []
-        for ws, project_filter in self.connections:
-            if project_filter and event_project and project_filter != event_project:
-                continue
+        for ws in self.channels[channel]:
             try:
                 await ws.send_json(event)
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            self.disconnect(ws)
+            self.disconnect(ws, channel)
 
-    def broadcast_sync(self, event: dict):
-        """Broadcast from a sync context (called by job workers in threads)."""
-        if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(self.broadcast(event), self._loop)
+    def emit_sync(self, event: dict):
+        """Emit from sync context (job workers in threads).
+        Routes to job channel + project channel for status changes."""
+        if not self._loop or not self._loop.is_running():
+            return
+
+        job_id = event.get("job_id")
+        project = event.get("project")
+
+        if job_id:
+            asyncio.run_coroutine_threadsafe(
+                self.send_to_channel(f"job:{job_id}", event), self._loop
+            )
+
+        if project and event.get("type") in (
+            "job_started", "job_complete", "job_failed",
+            "job_cancelled", "job_progress",
+        ):
+            asyncio.run_coroutine_threadsafe(
+                self.send_to_channel(f"project:{project}", event), self._loop
+            )
 
     def set_loop(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
 
 
-# Global connection manager instance
 manager = ConnectionManager()
 
 
 def get_broadcast_fn():
-    """Return a sync-callable broadcast function for the job manager."""
-    return manager.broadcast_sync
+    return manager.emit_sync
 
 
-@router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, project: str | None = None):
-    """WebSocket for real-time job/agent updates.
-
-    Connect with optional ?project=name to filter events.
-    """
-    # Store the event loop for sync broadcasting
+@router.websocket("/ws/jobs/{job_id}")
+async def job_websocket(websocket: WebSocket, job_id: str):
+    """Live logs + progress for a specific job."""
     manager.set_loop(asyncio.get_event_loop())
-
-    await manager.connect(websocket, project)
+    channel = f"job:{job_id}"
+    await manager.connect(websocket, channel)
     try:
-        # Keep connection alive, handle client messages (ping/pong)
         while True:
             data = await websocket.receive_text()
-            # Client can send ping or subscribe messages
             if data == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        manager.disconnect(websocket, channel)
+
+
+@router.websocket("/ws/project/{project}")
+async def project_websocket(websocket: WebSocket, project: str):
+    """Job status changes + toasts for a project."""
+    manager.set_loop(asyncio.get_event_loop())
+    channel = f"project:{project}"
+    await manager.connect(websocket, channel)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, channel)

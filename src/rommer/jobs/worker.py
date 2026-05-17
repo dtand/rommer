@@ -72,12 +72,12 @@ def run_graph_gen(manager: JobManager, job_id: str, project: Project, config: di
     manager.complete_job(job_id, f"Generated {node_count} nodes")
 
 
-def _emit_log(manager: JobManager, job_id: str, message: str):
+def _emit_log(manager: JobManager, job_id: str, message: str, log_type: str = "log"):
     """Emit a log event for a job."""
     import json as _json
     manager.db.execute(
         "INSERT INTO job_event (job_id, type, data) VALUES (?, 'log', ?)",
-        (job_id, _json.dumps({"message": message})),
+        (job_id, _json.dumps({"message": message, "log_type": log_type})),
     )
     manager.db.commit()
     from rommer.jobs.manager import _broadcast
@@ -85,7 +85,7 @@ def _emit_log(manager: JobManager, job_id: str, message: str):
         "type": "job_log",
         "job_id": job_id,
         "project": manager.project.name,
-        "data": {"message": message},
+        "data": {"message": message, "log_type": log_type},
     })
 
 
@@ -117,11 +117,24 @@ def run_knowledge_analysis(manager: JobManager, job_id: str, project: Project, c
         if etype == "agent_text":
             text = event.get("text", "").strip()
             if text and len(text) > 3:
-                _emit_log(manager, job_id, text[:300])
+                _emit_log(manager, job_id, text[:500], "log")
+        elif etype == "agent_thinking":
+            text = event.get("text", "").strip()
+            if text and len(text) > 3:
+                _emit_log(manager, job_id, text[:500], "thinking")
         elif etype == "agent_tool_call":
             tool = event.get("tool", "")
             tool_input = event.get("input", {})
-            _emit_log(manager, job_id, f"[tool] {tool}")
+            detail = ""
+            if tool == "Bash":
+                detail = f": {tool_input.get('command', '')[:200]}"
+            elif tool == "Read":
+                detail = f": {tool_input.get('file_path', '')}"
+            elif tool in ("Edit", "Write"):
+                detail = f": {tool_input.get('file_path', '')}"
+            elif tool in ("Grep", "Glob"):
+                detail = f": {tool_input.get('pattern', '')}"
+            _emit_log(manager, job_id, f"[{tool}]{detail}", "tool_call")
             # Track file access for progress
             if tool == "Read" and isinstance(tool_input, dict):
                 file_path = tool_input.get("file_path", "")
@@ -131,6 +144,10 @@ def run_knowledge_analysis(manager: JobManager, job_id: str, project: Project, c
                         pct = min(85, 10 + int(75 * len(files_seen) / file_count))
                         fname = file_path.split("/")[-1]
                         manager.emit_progress(job_id, f"Analyzing: {fname}", pct, f"File {len(files_seen)}/{file_count}")
+        elif etype == "agent_tool_result":
+            output = event.get("output", "")
+            if output:
+                _emit_log(manager, job_id, str(output)[:300], "tool_result")
 
     result = analyzer.spawn(model=model, timeout=1800, on_event=on_event)
 
@@ -365,10 +382,29 @@ def _run_agent_job(agent_class, manager: JobManager, job_id: str, project: Proje
         if etype == "agent_text":
             text = event.get("text", "").strip()
             if text and len(text) > 3:
-                _emit_log(manager, job_id, text[:300])
+                _emit_log(manager, job_id, text[:500], "log")
+        elif etype == "agent_thinking":
+            text = event.get("text", "").strip()
+            if text and len(text) > 3:
+                _emit_log(manager, job_id, text[:500], "thinking")
         elif etype == "agent_tool_call":
             tool = event.get("tool", "")
-            _emit_log(manager, job_id, f"[tool] {tool}")
+            tool_input = event.get("input", {})
+            # Format tool call with key details
+            detail = ""
+            if tool == "Bash":
+                detail = f": {tool_input.get('command', '')[:200]}"
+            elif tool == "Read":
+                detail = f": {tool_input.get('file_path', '')}"
+            elif tool in ("Edit", "Write"):
+                detail = f": {tool_input.get('file_path', '')}"
+            elif tool in ("Grep", "Glob"):
+                detail = f": {tool_input.get('pattern', '')}"
+            _emit_log(manager, job_id, f"[{tool}]{detail}", "tool_call")
+        elif etype == "agent_tool_result":
+            output = event.get("output", "")
+            if output:
+                _emit_log(manager, job_id, str(output)[:300], "tool_result")
 
     result = agent.spawn(model=model, timeout=1800, on_event=on_event)
 
