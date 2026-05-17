@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from rommer.cli.commands import init_project, build_graph, ghidra_decompile, launch_agent, nuke
+from rommer.cli.commands import init_project, build_graph, ghidra_decompile, launch_agent, emulator, nuke
 
 
 def main():
@@ -41,6 +41,13 @@ def main():
     sp.add_argument("--stage", help="Refactor pipeline stage (for refactor agent)")
     sp.add_argument("--dry-run", action="store_true", help="Show what would run without executing")
 
+    # emulator
+    sp = subparsers.add_parser("emulator", help="Launch mGBA with a project's ROM and save state")
+    sp.add_argument("--project", required=True, help="Project name")
+    sp.add_argument("--save-state", help="Save state filename (default: first available)")
+    sp.add_argument("--headless", action="store_true", help="Run as TCP server instead of GUI")
+    sp.add_argument("--port", type=int, default=9123, help="TCP port for headless mode (default: 9123)")
+
     # nuke
     sp = subparsers.add_parser("nuke", help="Clean up node data (DB + filesystem)")
     sp.add_argument("--project", required=True, help="Project name")
@@ -60,6 +67,7 @@ def main():
         "build-graph": build_graph.handler,
         "ghidra-decompile": ghidra_decompile.handler,
         "launch-agent": launch_agent.handler,
+        "emulator": emulator.handler,
         "nuke": nuke.handler,
     }
 
