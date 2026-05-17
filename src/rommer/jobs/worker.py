@@ -431,12 +431,137 @@ def run_refactor_system_tracer(manager: JobManager, job_id: str, project: Projec
     _run_agent_job(SystemTracer, manager, job_id, project, config)
 
 
+def run_dynamic_analysis(manager: JobManager, job_id: str, project: Project, config: dict):
+    """Run dynamic analysis — start emulator server, spawn exploration agent."""
+    import os
+    import signal
+    import subprocess
+    import time
+
+    model = config.get("model", "opus")
+    focus = config.get("focus")
+    save_state = config.get("save_state")
+    port = config.get("port", 9123)
+    frame_budget = config.get("frame_budget", 50000)
+
+    rom_path = project.rom_path
+    if not rom_path.exists():
+        raise FileNotFoundError(f"ROM not found: {rom_path}")
+
+    # Find save state
+    if save_state:
+        state_path = project.save_states_dir / save_state
+    else:
+        # Use first available save state
+        saves = list(project.save_states_dir.iterdir()) if project.save_states_dir.exists() else []
+        saves = [s for s in saves if s.is_file() and not s.name.startswith(".")]
+        if not saves:
+            raise FileNotFoundError("No save states found. Add a save state to save_states/")
+        state_path = saves[0]
+
+    if not state_path.exists():
+        raise FileNotFoundError(f"Save state not found: {state_path}")
+
+    _emit_log(manager, job_id, f"ROM: {rom_path}")
+    _emit_log(manager, job_id, f"Save state: {state_path.name}")
+    _emit_log(manager, job_id, f"Port: {port}")
+
+    # Working directory for this agent's evidence
+    workdir = project.root / "tmp" / job_id
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    # Start emulator server
+    _emit_log(manager, job_id, "Starting emulator server...")
+    manager.emit_progress(job_id, "Starting emulator", 10, "Launching mGBA server...")
+
+    emu_cmd = [
+        "python", "-m", "rommer.emulator.gba.mgba.server",
+        "--rom", str(rom_path),
+        "--state", str(state_path),
+        "--workdir", str(workdir),
+        "--port", str(port),
+    ]
+
+    emu_env = os.environ.copy()
+    mgba_lib = os.environ.get("MGBA_LIB_PATH", "/tmp/mgba-src/build")
+    emu_env["DYLD_LIBRARY_PATH"] = mgba_lib
+
+    emu_proc = subprocess.Popen(
+        emu_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=emu_env,
+    )
+
+    # Wait for server to be ready
+    time.sleep(3)
+    if emu_proc.poll() is not None:
+        output = emu_proc.stdout.read()
+        raise RuntimeError(f"Emulator server failed to start: {output[:500]}")
+
+    _emit_log(manager, job_id, f"Emulator server running on port {port}")
+    manager.emit_progress(job_id, "Agent exploring", 20, "Agent spawned...")
+
+    try:
+        # Spawn the agent
+        from rommer.agents.dynamic_analyzer import DynamicAnalyzer
+        agent = DynamicAnalyzer(
+            project, focus=focus, server_port=port,
+            frame_budget=frame_budget, save_state=save_state,
+        )
+
+        def on_event(event: dict):
+            etype = event.get("type", "")
+            if etype == "agent_text":
+                text = event.get("text", "").strip()
+                if text and len(text) > 3:
+                    _emit_log(manager, job_id, text[:300])
+            elif etype == "agent_tool_call":
+                tool = event.get("tool", "")
+                _emit_log(manager, job_id, f"[tool] {tool}")
+
+        result = agent.spawn(model=model, timeout=1800, on_event=on_event)
+
+        discoveries = 0
+        if result and isinstance(result, dict):
+            stage = config.get("stage_discoveries", False)
+            if stage:
+                discoveries = _stage_discoveries(manager, job_id, result)
+                _emit_log(manager, job_id, f"Staged {discoveries} discoveries for merge")
+            else:
+                staged = agent.complete(result)
+                discoveries = len(staged)
+                if discoveries:
+                    _emit_log(manager, job_id, f"Discovered {discoveries} addresses")
+
+            for obs in result.get("observations", []):
+                _emit_log(manager, job_id, f"  {obs}")
+
+        manager.complete_job(job_id, f"Found {discoveries} discoveries")
+
+    finally:
+        # Kill emulator server
+        _emit_log(manager, job_id, "Stopping emulator server...")
+        try:
+            emu_proc.terminate()
+            emu_proc.wait(timeout=5)
+        except Exception:
+            emu_proc.kill()
+
+        # Clean up workdir
+        import shutil
+        if workdir.exists():
+            shutil.rmtree(workdir, ignore_errors=True)
+
+
 # Registry of job types to worker functions
 WORKERS = {
     "graph_gen": run_graph_gen,
     "knowledge_analysis": run_knowledge_analysis,
     "ghidra_decompile": run_ghidra_decompile,
     "static_analysis": run_static_analysis,
+    "dynamic_analysis": run_dynamic_analysis,
     "type_resolver": run_refactor_type_resolver,
     "literal_pool": run_refactor_literal_pool,
     "forward_decl": run_refactor_forward_decl,

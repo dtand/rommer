@@ -138,6 +138,46 @@ def start_static_analysis(req: AgentJobRequest):
     return {"job_id": job_id, "status": "running"}
 
 
+class DynamicJobRequest(BaseModel):
+    project: str
+    model: str = "opus"
+    focus: str | None = None
+    save_state: str | None = None
+    port: int = 9123
+    frame_budget: int = 50000
+    parallel: int = 1
+    merge_strategy: str = "union"
+
+
+@router.post("/jobs/dynamic-analysis")
+def start_dynamic_analysis(req: DynamicJobRequest):
+    """Start dynamic analysis agent with emulator."""
+    p = Project(req.project)
+    if not p.exists():
+        return {"error": f"Project '{req.project}' not found"}
+    mgr = JobManager(p)
+    config = {
+        "model": req.model,
+        "focus": req.focus,
+        "save_state": req.save_state,
+        "port": req.port,
+        "frame_budget": req.frame_budget,
+    }
+    if req.parallel > 1:
+        # Each parallel agent needs a different port
+        job_ids = []
+        for i in range(req.parallel):
+            agent_config = {**config, "port": req.port + i}
+            job_id = mgr.create_job("dynamic_analysis", agent_config)
+            mgr.start_job(job_id)
+            job_ids.append(job_id)
+        return {"job_ids": job_ids, "parallel": req.parallel, "status": "running"}
+    else:
+        job_id = mgr.create_job("dynamic_analysis", config)
+        mgr.start_job(job_id)
+        return {"job_id": job_id, "status": "running"}
+
+
 @router.post("/jobs/refactor/{stage}")
 def start_refactor_stage(stage: str, req: AgentJobRequest):
     """Start a refactor pipeline stage.

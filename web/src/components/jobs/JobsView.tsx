@@ -26,6 +26,7 @@ const TYPE_LABELS: Record<string, string> = {
   graph_gen: 'Graph Generation',
   knowledge_analysis: 'Knowledge Analysis',
   ghidra_decompile: 'Ghidra Decompile',
+  dynamic_analysis: 'Dynamic Analysis',
   static_analysis: 'Static Analysis',
   type_resolver: 'Type Resolver',
   literal_pool: 'Literal Pool Resolver',
