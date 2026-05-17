@@ -125,29 +125,48 @@ WORKSPACE RULES:
         return [self.project.root]
 
     def complete(self, result: dict) -> list[dict]:
-        """Process agent output, push candidate discoveries to DB.
+        """Process agent output, push discoveries to DB as scratch tier.
 
-        Returns list of staged candidates.
+        Returns list of staged discoveries.
         """
-        candidates = result.get("candidates", [])
+        if isinstance(result, str):
+            return []
+
+        discoveries = result.get("discoveries", []) or result.get("candidates", [])
         staged = []
 
-        for c in candidates:
+        for c in discoveries:
+            address = c.get("address", "")
+            label = c.get("label", "")
+            if not address or not label:
+                continue
+
+            # Skip duplicates
+            existing = self.db.execute(
+                "SELECT id FROM discovery WHERE address = ? AND label = ?",
+                (address, label),
+            ).fetchone()
+            if existing:
+                continue
+
+            metadata = c.get("metadata")
+            metadata_json = json.dumps(metadata) if metadata else None
+
             try:
                 self.db.execute(
-                    """INSERT INTO node_candidate
-                       (node_id, label, address, before_value, after_value,
-                        confidence, method, reasoning)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO discovery
+                       (label, address, data_type, tier, confidence,
+                        source, discovery_method, notes, metadata)
+                       VALUES (?, ?, ?, 'scratch', ?, ?, ?, ?, ?)""",
                     (
-                        self.node_id or "unknown",
-                        c.get("label", ""),
-                        c.get("address", ""),
-                        c.get("before_value", ""),
-                        c.get("after_value", ""),
-                        c.get("confidence", "medium"),
+                        label,
+                        address,
+                        c.get("data_type", "u16"),
+                        c.get("confidence", "probable"),
+                        self.agent_type,
                         c.get("method", self.agent_type),
-                        c.get("reasoning", ""),
+                        c.get("notes", c.get("reasoning", "")),
+                        metadata_json,
                     ),
                 )
                 staged.append(c)
