@@ -767,6 +767,84 @@ def run_function_analysis(manager: JobManager, job_id: str, project: Project, co
     manager.complete_job(job_id, f"Analyzed {analyzed_count[0]}/{len(chunk)} functions at level {level}")
 
 
+def run_code_cleanup(manager: JobManager, job_id: str, project: Project, config: dict):
+    """Clean Ghidra artifacts from a chunk of functions."""
+    model = config.get("model", "opus")
+    chunk = config.get("chunk", [])
+    level = config.get("level", 0)
+
+    if not chunk:
+        manager.fail_job(job_id, "No functions in chunk")
+        return
+
+    _emit_log(manager, job_id, f"Cleaning {len(chunk)} functions at level {level} (model: {model})")
+    manager.emit_progress(job_id, f"Cleanup L{level}", 5, f"Loading {len(chunk)} functions...")
+
+    funcs_dir = project.src_dir / "functions"
+    func_data = []
+
+    for func_info in chunk:
+        addr = func_info.get("address", "")
+        file_path = None
+        for f in funcs_dir.glob(f"{addr.replace('0x', '')}*.c"):
+            file_path = f
+            break
+        if not file_path or not file_path.exists():
+            continue
+        func_data.append({
+            "address": addr,
+            "code": file_path.read_text(),
+            "file_path": str(file_path),
+        })
+
+    if not func_data:
+        manager.complete_job(job_id, "No function files found")
+        return
+
+    _emit_log(manager, job_id, f"Loaded {len(func_data)} function files")
+    manager.emit_progress(job_id, f"Cleanup L{level}", 15, f"Agent cleaning {len(func_data)} functions...")
+
+    from rommer.agents.code_cleanup import CodeCleanupAgent
+    agent = CodeCleanupAgent(project, functions=func_data)
+
+    def on_event(event: dict):
+        etype = event.get("type", "")
+        if etype == "agent_text":
+            text = event.get("text", "").strip()
+            if text and len(text) > 3:
+                _emit_log(manager, job_id, text[:500], "log")
+        elif etype == "agent_thinking":
+            text = event.get("text", "").strip()
+            if text and len(text) > 3:
+                _emit_log(manager, job_id, text[:500], "thinking")
+        elif etype == "agent_tool_call":
+            tool = event.get("tool", "")
+            _emit_log(manager, job_id, f"[{tool}]", "tool_call")
+
+    result = agent.spawn(model=model, timeout=3600, on_event=on_event)
+
+    cleaned_count = 0
+    if result:
+        # Result is array of {address, cleaned_code}
+        items = result if isinstance(result, list) else result.get("functions", [result])
+        for item in items:
+            addr = item.get("address", "").replace("0x", "").upper()
+            cleaned = item.get("cleaned_code", "")
+            if not addr or not cleaned:
+                continue
+
+            for f in funcs_dir.glob(f"{addr}*.c"):
+                f.write_text(cleaned)
+                cleaned_count += 1
+                _emit_log(manager, job_id, f"Cleaned: {f.name}")
+                break
+
+        pct = min(95, 50 + int(45 * cleaned_count / max(len(func_data), 1)))
+        manager.emit_progress(job_id, f"Cleanup L{level}", pct, f"Cleaned {cleaned_count}/{len(func_data)}")
+
+    manager.complete_job(job_id, f"Cleaned {cleaned_count}/{len(chunk)} functions at level {level}")
+
+
 # Registry of job types to worker functions
 WORKERS = {
     "graph_gen": run_graph_gen,
@@ -781,4 +859,5 @@ WORKERS = {
     "struct_annotator": run_refactor_struct_annotator,
     "system_tracer": run_refactor_system_tracer,
     "function_analysis": run_function_analysis,
+    "code_cleanup": run_code_cleanup,
 }

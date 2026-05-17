@@ -33,6 +33,8 @@ const TYPE_LABELS: Record<string, string> = {
   forward_decl: 'Forward Declarations',
   struct_annotator: 'Struct Annotator',
   system_tracer: 'System Tracer',
+  code_cleanup: 'Code Cleanup',
+  function_analysis: 'Function Analysis',
   agent: 'Analysis Agent',
 };
 

@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from rommer.cli.commands import init_project, build_graph, build_tree, build_brief, preprocess, static_analyze, ghidra_decompile, launch_agent, emulator, worker, nuke
+from rommer.cli.commands import init_project, build_graph, build_tree, build_brief, preprocess, cleanup, static_analyze, ghidra_decompile, launch_agent, emulator, worker, nuke
 
 
 def main():
@@ -29,6 +29,13 @@ def main():
     # build-brief
     sp = subparsers.add_parser("build-brief", help="Generate condensed game brief from project data")
     sp.add_argument("--project", required=True, help="Project name")
+
+    # cleanup
+    sp = subparsers.add_parser("cleanup", help="Agent-driven Ghidra artifact cleanup")
+    sp.add_argument("--project", required=True, help="Project name")
+    sp.add_argument("--num-nodes", type=int, default=20, help="Functions per agent batch (default: 20)")
+    sp.add_argument("--parallel", type=int, default=5, help="Concurrent agent jobs (default: 5)")
+    sp.add_argument("--model", default="opus", help="Model to use (default: opus)")
 
     # static-analyze
     sp = subparsers.add_parser("static-analyze", help="Bottom-up function analysis pipeline")
@@ -91,6 +98,7 @@ def main():
         "build-graph": build_graph.handler,
         "build-tree": build_tree.handler,
         "build-brief": build_brief.handler,
+        "cleanup": cleanup.handler,
         "static-analyze": static_analyze.handler,
         "preprocess": preprocess.handler,
         "ghidra-decompile": ghidra_decompile.handler,

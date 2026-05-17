@@ -144,6 +144,18 @@ class FunctionAnalysisRequest(BaseModel):
     config: dict  # contains: model, chunk, level
 
 
+@router.post("/jobs/code-cleanup")
+def start_code_cleanup(req: FunctionAnalysisRequest):
+    """Start code cleanup job for a chunk of functions."""
+    p = Project(req.project)
+    if not p.exists():
+        return {"error": f"Project '{req.project}' not found"}
+    mgr = JobManager(p)
+    job_id = mgr.create_job("code_cleanup", req.config)
+    mgr.start_job(job_id)
+    return {"job_id": job_id, "status": "running"}
+
+
 @router.post("/jobs/function-analysis")
 def start_function_analysis(req: FunctionAnalysisRequest):
     """Start function analysis job for a chunk of functions."""
