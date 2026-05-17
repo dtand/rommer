@@ -103,7 +103,7 @@ def generate_graph(
         model=model,
         allowed_tools=["Read", "Write"],
         add_dirs=[walkthrough_path.parent, walkthrough_path.parent.parent.parent / "graph"],
-        timeout=1800,
+        timeout=3600,
     )
 
     # Read from file the agent wrote
@@ -128,7 +128,7 @@ def generate_graph_streaming(
         model=model,
         allowed_tools=["Read", "Write"],
         add_dirs=[walkthrough_path.parent, walkthrough_path.parent.parent.parent / "graph"],
-        timeout=1800,
+        timeout=3600,
         on_event=on_event,
     )
 
@@ -157,7 +157,7 @@ def generate_graph_streaming(
         model=model,
         allowed_tools=["Read"],
         add_dirs=[walkthrough_path.parent],
-        timeout=1800,
+        timeout=3600,
         on_event=on_event,
     )
 

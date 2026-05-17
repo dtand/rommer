@@ -26,7 +26,9 @@ def run_graph_gen(manager: JobManager, job_id: str, project: Project, config: di
         wt_files = list(guides_dir.glob("walkthrough*")) if guides_dir.exists() else []
         if not wt_files:
             raise FileNotFoundError("No walkthrough file found")
-        wt_path = wt_files[0]
+        # Prefer .txt files, then largest file
+        txt_files = [f for f in wt_files if f.suffix == ".txt"]
+        wt_path = txt_files[0] if txt_files else max(wt_files, key=lambda f: f.stat().st_size)
 
     # Load prior results
     output_dir = project.graph_dir / "preprocessor_output"
