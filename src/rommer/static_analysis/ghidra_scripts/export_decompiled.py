@@ -57,8 +57,8 @@ while funcs.hasNext():
     except Exception as e:
         failed += 1
 
-    if total % 100 == 0:
-        print("  Processed " + str(total) + " functions (" + str(success) + " decompiled)...")
+    if total % 50 == 0:
+        print("DECOMPILE_PROGRESS: %d decompiled, %d failed, %d total" % (success, failed, total))
 
 # Write single combined C file
 combined_path = os.path.join(output_dir, "all_functions.c")

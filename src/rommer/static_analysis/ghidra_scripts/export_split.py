@@ -55,8 +55,8 @@ while funcs.hasNext():
     except:
         pass
 
-    if total % 500 == 0:
-        print("  %d / ? functions exported (%d success)" % (total, success))
+    if total % 50 == 0:
+        print("EXPORT_PROGRESS: %d exported, %d total" % (success, total))
 
 print("")
 print("Done! %d functions exported to %s" % (success, output_dir))

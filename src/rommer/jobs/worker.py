@@ -195,34 +195,43 @@ def _run_ghidra_cmd(cmd: list[str], env: dict, manager: JobManager, job_id: str,
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
 
     func_count = 0
+    total_estimate = 20000  # rough estimate, refine from output
     for line in proc.stdout:
         line = line.strip()
         if not line:
             continue
 
-        # Parse Ghidra output for progress updates
-        if "Importing" in line:
-            manager.emit_progress(job_id, f"{phase}: Importing", base_pct + 5, line[:100])
+        # Parse our DECOMPILE_PROGRESS markers from export script
+        if line.startswith("DECOMPILE_PROGRESS:"):
+            # Format: "DECOMPILE_PROGRESS: 1234 decompiled, 5 failed, 1239 total"
+            try:
+                import re
+                m = re.search(r'(\d+) decompiled.*?(\d+) total', line)
+                if m:
+                    func_count = int(m.group(1))
+                    total_estimate = int(m.group(2))
+                    pct = min(95, base_pct + 10 + int(55 * func_count / max(total_estimate, 1)))
+                    manager.emit_progress(job_id, f"Decompiling: {func_count}/{total_estimate}", pct,
+                                          f"{func_count} decompiled")
+            except Exception:
+                pass
+        elif line.startswith("EXPORT_PROGRESS:"):
+            try:
+                import re
+                m = re.search(r"(\d+) exported.*?(\d+) total", line)
+                if m:
+                    exported = int(m.group(1))
+                    total_exp = int(m.group(2))
+                    pct = min(98, 70 + int(28 * exported / max(total_exp, 1)))
+                    manager.emit_progress(job_id, f"Exporting: {exported}/{total_exp}", pct, f"{exported} files written")
+            except Exception:
+                pass
+        elif "Importing" in line:
+            manager.emit_progress(job_id, "Importing ROM", base_pct + 5, line[:100])
         elif "Analyzing" in line or "analysis" in line.lower():
-            manager.emit_progress(job_id, f"{phase}: Analyzing", base_pct + 15, line[:100])
-        elif "decompiled" in line.lower():
-            try:
-                parts = line.split()
-                for i, p in enumerate(parts):
-                    if "decompiled" in p.lower() and i > 0:
-                        func_count = int(parts[i - 1].replace(",", ""))
-            except (ValueError, IndexError):
-                pass
-            manager.emit_progress(job_id, f"{phase}: Decompiling", min(base_pct + 35, 95), f"{func_count} functions...")
-        elif "Processed" in line and "functions" in line:
-            _emit_log(manager, job_id, line[:200])
-            try:
-                parts = line.split()
-                for i, p in enumerate(parts):
-                    if p == "functions":
-                        func_count = int(parts[i - 1].replace(",", ""))
-            except (ValueError, IndexError):
-                pass
+            manager.emit_progress(job_id, "Analyzing", base_pct + 15, line[:100])
+        elif "Done!" in line:
+            manager.emit_progress(job_id, "Finishing", 95, line[:100])
 
         _emit_log(manager, job_id, line[:200])
 
