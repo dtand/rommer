@@ -128,6 +128,13 @@ def start_pipeline(name: str, req: StartPipelineRequest):
     _store_schema_results(conn, section_map, systems, data)
     conn.close()
 
+    # Generate game brief
+    from rommer.cli.commands.build_brief import build_game_brief
+    brief = build_game_brief(project)
+    brief_path = project.src_dir / "game_brief.md"
+    brief_path.parent.mkdir(parents=True, exist_ok=True)
+    brief_path.write_text(brief)
+
     # Auto-kick background jobs
     from rommer.jobs.manager import JobManager
     mgr = JobManager(project)
