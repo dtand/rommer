@@ -41,6 +41,9 @@ def _build_prompts(walkthrough_path: Path, section_map: dict, systems: dict) -> 
         "Output JSON only."
     )
 
+    # Output file path — agent writes JSON here since output may be too large for stdout
+    output_file = walkthrough_path.parent.parent.parent / "graph" / "preprocessor_output" / "pass4_graph_output.json"
+
     prompt = (
         f"Read the walkthrough at: {walkthrough_path}\n\n"
         f"Section map: {section_map}\n"
@@ -60,10 +63,29 @@ def _build_prompts(walkthrough_path: Path, section_map: dict, systems: dict) -> 
         "- tags: 1-8 tags from the taxonomy\n\n"
         "For edges: connect each node to its immediate successor(s).\n"
         "Format: {\"from\": \"node_id_a\", \"to\": \"node_id_b\"}\n\n"
-        "Output: {\"nodes\": [...], \"edges\": [...]}"
+        "CRITICAL: The output will be large (200+ nodes). Do NOT describe the output — "
+        "write the complete JSON object to this file:\n"
+        f"  {output_file}\n\n"
+        "Use the Write tool to write the FULL JSON: {{\"nodes\": [...], \"edges\": [...]}}\n"
+        "After writing the file, respond with just: DONE"
     )
 
     return system_prompt, prompt
+
+
+def _read_output_file(walkthrough_path: Path) -> dict | None:
+    """Read the graph JSON written by the agent to the output file."""
+    import json
+    output_file = walkthrough_path.parent.parent.parent / "graph" / "preprocessor_output" / "pass4_graph_output.json"
+    if output_file.exists():
+        try:
+            data = json.loads(output_file.read_text())
+            if isinstance(data, dict) and "nodes" in data:
+                output_file.unlink()  # Clean up
+                return data
+        except (json.JSONDecodeError, Exception):
+            pass
+    return None
 
 
 def generate_graph(
@@ -71,22 +93,24 @@ def generate_graph(
 ) -> dict:
     """Generate the walkthrough graph (nodes + edges).
 
-    Returns nodes array and edges array with tags included.
+    The agent writes output to a file (too large for stdout).
     """
     system_prompt, prompt = _build_prompts(walkthrough_path, section_map, systems)
 
-    result = invoke(
+    invoke(
         prompt=prompt,
         system_prompt=system_prompt,
         model=model,
-        allowed_tools=["Read"],
-        add_dirs=[walkthrough_path.parent],
+        allowed_tools=["Read", "Write"],
+        add_dirs=[walkthrough_path.parent, walkthrough_path.parent.parent.parent / "graph"],
         timeout=1800,
     )
 
-    if isinstance(result, dict):
+    # Read from file the agent wrote
+    result = _read_output_file(walkthrough_path)
+    if result:
         return result
-    return {"nodes": [], "edges": [], "raw": str(result)[:500]}
+    return {"nodes": [], "edges": [], "error": "Agent did not write output file"}
 
 
 def generate_graph_streaming(
@@ -98,19 +122,21 @@ def generate_graph_streaming(
 
     system_prompt, prompt = _build_prompts(walkthrough_path, section_map, systems)
 
-    result = invoke_streaming(
+    invoke_streaming(
         prompt=prompt,
         system_prompt=system_prompt,
         model=model,
-        allowed_tools=["Read"],
-        add_dirs=[walkthrough_path.parent],
+        allowed_tools=["Read", "Write"],
+        add_dirs=[walkthrough_path.parent, walkthrough_path.parent.parent.parent / "graph"],
         timeout=1800,
         on_event=on_event,
     )
 
-    if isinstance(result, dict):
+    # Read from file the agent wrote
+    result = _read_output_file(walkthrough_path)
+    if result:
         return result
-    return {"nodes": [], "edges": [], "raw": str(result)[:500]}
+    return {"nodes": [], "edges": [], "error": "Agent did not write output file"}
 
 
 def generate_graph_streaming(
