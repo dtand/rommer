@@ -36,11 +36,23 @@ def is_postgres() -> bool:
     return get_database_url() is not None
 
 
+class HybridRow(dict):
+    """Dict that also supports index-based access like sqlite3.Row."""
+
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self._keys = list(data.keys())
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return super().__getitem__(self._keys[key])
+        return super().__getitem__(key)
+
+
 class PostgresConnectionWrapper:
     """Wraps psycopg2 connection to provide a sqlite3-like interface.
 
-    This allows existing code that uses conn.execute().fetchall()
-    with sqlite3.Row to work with Postgres with minimal changes.
+    Returns HybridRow objects that support both row["col"] and row[0] access.
     """
 
     def __init__(self, conn):
@@ -49,11 +61,11 @@ class PostgresConnectionWrapper:
 
     def execute(self, sql: str, params=None):
         """Execute SQL and return self for chaining."""
-        # Convert ? placeholders to %s for psycopg2
         sql = sql.replace("?", "%s")
-        # Convert INSERT OR REPLACE/IGNORE to Postgres
         sql = sql.replace("INSERT OR REPLACE", "INSERT")
         sql = sql.replace("INSERT OR IGNORE", "INSERT")
+        # Handle last_insert_rowid() → lastval()
+        sql = sql.replace("last_insert_rowid()", "lastval()")
         self._cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         try:
             self._cursor.execute(sql, params or ())
@@ -72,12 +84,12 @@ class PostgresConnectionWrapper:
         if self._cursor is None:
             return None
         row = self._cursor.fetchone()
-        return row
+        return HybridRow(row) if row else None
 
     def fetchall(self):
         if self._cursor is None:
             return []
-        return self._cursor.fetchall()
+        return [HybridRow(r) for r in self._cursor.fetchall()]
 
     def commit(self):
         self._conn.commit()

@@ -286,4 +286,10 @@ class JobManager:
 
     def _get_project_id(self) -> int:
         row = self.db.execute("SELECT id FROM project LIMIT 1").fetchone()
-        return row[0] if row else 0
+        if not row:
+            return 0
+        # Support both dict (Postgres) and tuple/Row (SQLite)
+        try:
+            return row["id"]
+        except (KeyError, TypeError):
+            return row[0]
