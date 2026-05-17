@@ -598,11 +598,26 @@ def run_dynamic_analysis(manager: JobManager, job_id: str, project: Project, con
             shutil.rmtree(workdir, ignore_errors=True)
 
 
+def run_build_tree(manager: JobManager, job_id: str, project: Project, config: dict):
+    """Build the function call graph from decompiled code."""
+    _emit_log(manager, job_id, "Building function call graph...")
+    manager.emit_progress(job_id, "Building tree", 10, "Parsing function calls...")
+
+    from rommer.cli.commands.build_tree import build_call_graph
+    graph = build_call_graph(project.src_dir)
+
+    _emit_log(manager, job_id, f"Tree built: {graph['total_functions']} functions, {graph['max_depth']} levels deep")
+    _emit_log(manager, job_id, f"  Leaves: {graph['leaf_count']}, Roots: {graph['root_count']}, Cycles: {graph['cycle_count']}")
+
+    manager.complete_job(job_id, f"Call graph: {graph['total_functions']} functions, {graph['max_depth']} levels")
+
+
 # Registry of job types to worker functions
 WORKERS = {
     "graph_gen": run_graph_gen,
     "knowledge_analysis": run_knowledge_analysis,
     "ghidra_decompile": run_ghidra_decompile,
+    "build_tree": run_build_tree,
     "static_analysis": run_static_analysis,
     "dynamic_analysis": run_dynamic_analysis,
     "type_resolver": run_refactor_type_resolver,

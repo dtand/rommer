@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from rommer.cli.commands import init_project, build_graph, ghidra_decompile, launch_agent, emulator, worker, nuke
+from rommer.cli.commands import init_project, build_graph, build_tree, ghidra_decompile, launch_agent, emulator, worker, nuke
 
 
 def main():
@@ -25,6 +25,10 @@ def main():
     sp.add_argument("--model", default="opus", help="Model to use (default: opus)")
     sp.add_argument("--walkthrough", help="Specific walkthrough filename to use")
     sp.add_argument("--dry-run", action="store_true", help="Show pipeline steps without executing")
+
+    # build-tree
+    sp = subparsers.add_parser("build-tree", help="Build function call graph from decompiled code")
+    sp.add_argument("--project", required=True, help="Project name")
 
     # ghidra-decompile
     sp = subparsers.add_parser("ghidra-decompile", help="Run full Ghidra decompilation workflow")
@@ -70,6 +74,7 @@ def main():
     handlers = {
         "init-project": init_project.handler,
         "build-graph": build_graph.handler,
+        "build-tree": build_tree.handler,
         "ghidra-decompile": ghidra_decompile.handler,
         "launch-agent": launch_agent.handler,
         "emulator": emulator.handler,
