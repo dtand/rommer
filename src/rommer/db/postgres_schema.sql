@@ -255,3 +255,29 @@ DROP TRIGGER IF EXISTS job_status_notify ON job;
 CREATE TRIGGER job_status_notify
 AFTER UPDATE ON job
 FOR EACH ROW EXECUTE FUNCTION notify_job_status();
+
+-- Function analysis tracking
+CREATE TABLE IF NOT EXISTS function_analysis (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER REFERENCES project(id),
+    address TEXT NOT NULL,
+    original_name TEXT,
+    name TEXT,
+    system TEXT,
+    description TEXT,
+    confidence REAL DEFAULT 0.0,
+    completeness REAL DEFAULT 0.0,
+    level INTEGER,
+    notes TEXT,
+    calls TEXT,
+    called_by TEXT,
+    discovery_refs TEXT,
+    io_refs TEXT,
+    analyzed_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id, address)
+);
+CREATE INDEX IF NOT EXISTS idx_func_analysis_addr ON function_analysis(address);
+CREATE INDEX IF NOT EXISTS idx_func_analysis_system ON function_analysis(system);
+CREATE INDEX IF NOT EXISTS idx_func_analysis_level ON function_analysis(level);
