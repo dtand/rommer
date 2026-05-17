@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from rommer.cli.commands import init_project, build_graph, build_tree, build_brief, ghidra_decompile, launch_agent, emulator, worker, nuke
+from rommer.cli.commands import init_project, build_graph, build_tree, build_brief, preprocess, ghidra_decompile, launch_agent, emulator, worker, nuke
 
 
 def main():
@@ -28,6 +28,10 @@ def main():
 
     # build-brief
     sp = subparsers.add_parser("build-brief", help="Generate condensed game brief from project data")
+    sp.add_argument("--project", required=True, help="Project name")
+
+    # preprocess
+    sp = subparsers.add_parser("preprocess", help="Run deterministic preprocessing on decompiled code")
     sp.add_argument("--project", required=True, help="Project name")
 
     # build-tree
@@ -80,6 +84,7 @@ def main():
         "build-graph": build_graph.handler,
         "build-tree": build_tree.handler,
         "build-brief": build_brief.handler,
+        "preprocess": preprocess.handler,
         "ghidra-decompile": ghidra_decompile.handler,
         "launch-agent": launch_agent.handler,
         "emulator": emulator.handler,
